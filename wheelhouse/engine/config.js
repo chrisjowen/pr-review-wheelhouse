@@ -16,8 +16,7 @@ export const DEFAULTS = {
 	claudeModel: 'sonnet',
 	ollamaModel: 'qwen2.5:7b',
 	ollamaUrl: 'http://127.0.0.1:11434',
-	contextTokens: 16384,
-	extraGenerated: /** @type {string[]} */ ([])
+	contextTokens: 16384
 };
 
 const isRecord = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -48,11 +47,7 @@ export function readSettings(settings) {
 		contextTokens:
 			Number.isFinite(ctx) && ctx > 0
 				? Math.min(131072, Math.max(4096, Math.round(ctx)))
-				: DEFAULTS.contextTokens,
-		extraGenerated:
-			Array.isArray(s.extraGenerated) && s.extraGenerated.every((p) => typeof p === 'string')
-				? s.extraGenerated.slice(0, 50)
-				: DEFAULTS.extraGenerated
+				: DEFAULTS.contextTokens
 	};
 }
 

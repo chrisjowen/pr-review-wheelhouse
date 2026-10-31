@@ -64,12 +64,6 @@
 				"description": "How much an Ollama model reads at once: at least 4096. Bigger reads more of a stage’s diff but needs more memory.",
 				"type": "number",
 				"default": 16384
-			},
-			"extraGenerated": {
-				"title": "Also hide as generated",
-				"description": "File names (a * matches any part of a name), paths, or folders ending in /, hidden like build output. dist/, build/, lockfiles and snapshots are always hidden.",
-				"type": "list",
-				"default": []
 			}
 		}
 	}

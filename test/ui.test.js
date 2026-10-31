@@ -266,6 +266,45 @@ describe('a review in the tab', () => {
 	});
 });
 
+describe('coming back to the tab', () => {
+	it('reopens the last review as kept, and reads the PR again only on a click', async () => {
+		const reads = gh.calls.length;
+		const passes = model.calls.length;
+		const el = mount(running());
+		await until(() => $(el, '.rail'));
+		assert.match($(el, '.voyage-label').textContent, /1 of 5 reviewed/, 'as it was kept');
+		await reviews.settled();
+		assert.equal(gh.calls.length, reads, 'no gh read');
+		assert.equal(model.calls.length, passes, 'no model pass');
+		button(el, 'Check for new commits').click();
+		await until(() => gh.calls.length > reads);
+		assert.deepEqual(
+			gh.calls
+				.slice(reads)
+				.map((c) => c.argv.slice(0, 2).join(' '))
+				.sort(),
+			['pr diff', 'pr view']
+		);
+		await reviews.settled();
+		el.remove();
+	});
+
+	it('waits for a click before reviewing a ?pr= link it doesn’t keep', async () => {
+		const other = 'https://github.com/acme/lumen/pull/49';
+		window.happyDOM.setURL(`http://127.0.0.1:4310/projects/lumen/pr-review/review?pr=${other}`);
+		const reads = gh.calls.length;
+		const passes = model.calls.length;
+		const el = mount(running());
+		await until(() => $(el, '[data-key="pr-url"]')?.value === other);
+		assert.equal($(el, '.rail'), null);
+		assert.equal(button(el, 'Review').disabled, false);
+		assert.equal(gh.calls.length, reads, 'no gh read');
+		assert.equal(model.calls.length, passes, 'no model pass');
+		el.remove();
+		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
+	});
+});
+
 describe('placing notes on a long hunk', () => {
 	it('cuts the hunk where each note starts', async () => {
 		const { splitAtNotes } = await import('../wheelhouse/ui/index.js');

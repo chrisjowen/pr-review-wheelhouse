@@ -181,7 +181,7 @@ export class PrReviewTab extends HTMLElement {
 				await this.api('PUT', '/api/config', this._data?.settings ?? {}).catch(() => {});
 				await this.loadRecent();
 				const want = this.wanted();
-				if (want && !this.s.review) await this.open(want.url, want.stage);
+				if (want && !this.s.review) await this.reopen(want);
 			}
 		} else {
 			this.timers.engine = setTimeout(() => void this.connect(), ENGINE_RECHECK_MS);
@@ -244,25 +244,49 @@ export class PrReviewTab extends HTMLElement {
 
 	// ---------- a review ----------
 
+	/**
+	 * Reads a PR with gh and opens its review, starting the passes a new head
+	 * needs. Only the captain's click reaches this.
+	 */
 	async open(url, stage = null) {
 		this.s.opening = url;
 		this.s.error = null;
 		this.render();
 		try {
-			const r = await this.api('POST', '/api/reviews', { url });
-			this.s.review = r;
-			this.s.stage = stage && r.stages.some((x) => x.id === stage) ? stage : 'walkthrough';
-			this.s.attach = null;
-			this.s.expanded = new Set();
-			this.prints = {};
-			this.remember();
-			void this.api('POST', `/api/reviews/${r.id}/focus`, { stage: this.s.stage }).catch(() => {});
+			this.show(await this.api('POST', '/api/reviews', { url }), stage);
 		} catch (e) {
 			this.s.error = e.message;
+			if (this.s.review) this.toast(e.message);
 		}
 		this.s.opening = null;
 		this.render();
 		this.poll();
+	}
+
+	/**
+	 * Shows a review the engine already keeps, as kept, without reading the PR
+	 * or running a pass; any other PR waits in the URL box for the captain's click.
+	 */
+	async reopen({ url, stage }) {
+		const kept = this.s.recent.find((x) => x.url === url);
+		try {
+			if (!kept) throw new Error('not kept');
+			this.show(await this.api('GET', `/api/reviews/${kept.id}`), stage);
+		} catch {
+			this.s.typed = url;
+		}
+		this.render();
+		this.poll();
+	}
+
+	show(r, stage) {
+		this.s.review = r;
+		this.s.stage = stage && r.stages.some((x) => x.id === stage) ? stage : 'walkthrough';
+		this.s.attach = null;
+		this.s.expanded = new Set();
+		this.prints = {};
+		this.remember();
+		void this.api('POST', `/api/reviews/${r.id}/focus`, { stage: this.s.stage }).catch(() => {});
 	}
 
 	close() {
@@ -551,6 +575,16 @@ export class PrReviewTab extends HTMLElement {
 						{ class: 'voyage-track' },
 						h('div', { class: 'voyage-fill', style: { width: `${(n / r.stages.length) * 100}%` } })
 					)
+				),
+				h(
+					'button',
+					{
+						class: 'ghost-btn',
+						type: 'button',
+						onclick: () => void this.open(r.pr.url, this.s.stage),
+						title: 'Read the PR again with gh; new commits start a fresh review'
+					},
+					'Check for new commits'
 				),
 				h(
 					'button',

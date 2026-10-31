@@ -255,6 +255,11 @@ describe('reading the model’s answers', () => {
 			from: 10,
 			to: 90
 		});
+		assert.deepEqual(
+			anchor({ file: 'src/search.ts', from: 1, to: 500 }, f, r),
+			{ file: 'src/search.ts', from: 10, to: 90 },
+			'capped from where the diff starts'
+		);
 		assert.deepEqual(anchor({ file: 'src/search.ts' }, f, r), {
 			file: 'src/search.ts',
 			from: null,

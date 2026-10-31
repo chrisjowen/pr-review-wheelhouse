@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { createGitHub } from '../wheelhouse/engine/github.js';
 import { createReviews } from '../wheelhouse/engine/review.js';
 import { memoryStore } from '../wheelhouse/engine/store.js';
-import { ANSWERS, fakeGh, fakeModel, PR_URL, sampleView } from './helpers.js';
+import { ANSWERS, fakeGh, fakeModel, PR_URL, sampleView, stageOfMessages } from './helpers.js';
 
 const ID = 'acme__lumen__48';
 
@@ -411,5 +411,35 @@ describe('starting a review over', () => {
 		assert.deepEqual(r.decisions, {});
 		assert.equal(reviews.view(ID).runs.walkthrough.state, 'done');
 		assert.equal(reviews.list().length, 1);
+	});
+
+	it('is not undone by a pass that was still running for the old review', async () => {
+		const base = fakeModel(ANSWERS);
+		let started;
+		const running = new Promise((res) => (started = res));
+		let held = false;
+		const model = {
+			...base,
+			generate(o) {
+				if (held || stageOfMessages(o.messages) !== 'quality') return base.generate(o);
+				held = true;
+				started();
+				return new Promise((_res, rej) =>
+					o.signal.addEventListener('abort', () => rej(new Error('stopped')))
+				);
+			}
+		};
+		const { reviews, store } = setup({ model });
+		await reviews.open(PR_URL);
+		await running;
+		reviews.decide(ID, 'q1', 'keep');
+		const opened = reviews.view(ID).openedAt;
+		const r = await reviews.restart(ID);
+		await reviews.settled();
+		assert.notEqual(r.openedAt, opened);
+		assert.equal(reviews.view(ID), r);
+		assert.deepEqual(reviews.view(ID).decisions, {});
+		assert.equal(store.review(ID).openedAt, r.openedAt);
+		assert.deepEqual(store.review(ID).decisions, {});
 	});
 });

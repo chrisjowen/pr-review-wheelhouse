@@ -82,7 +82,6 @@ const reviews = createReviews({
 	github: createGitHub(ghRunner()),
 	store,
 	model: () => model,
-	config: () => settings,
 	log
 });
 const handle = createHandler({ reviews, store, config, version, model: () => model });

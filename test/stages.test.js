@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { kindOf, patternMatcher } from '../wheelhouse/engine/classify.js';
+import { kindOf } from '../wheelhouse/engine/classify.js';
 import { parseDiff } from '../wheelhouse/engine/diff.js';
 import {
 	heuristicPlan,
@@ -40,14 +40,6 @@ describe('what kind of file a path is', () => {
 	]) {
 		it(`${path} is ${kind}`, () => assert.equal(kindOf(path), kind));
 	}
-
-	it('takes the captain’s own generated patterns', () => {
-		const extra = patternMatcher(['*.gen.ts', 'schema/', 'api/openapi.yaml']);
-		assert.equal(kindOf('src/client.gen.ts', { extraGenerated: extra }), 'generated');
-		assert.equal(kindOf('schema/a.ts', { extraGenerated: extra }), 'generated');
-		assert.equal(kindOf('api/openapi.yaml', { extraGenerated: extra }), 'generated');
-		assert.equal(kindOf('src/client.ts', { extraGenerated: extra }), 'source');
-	});
 });
 
 describe('the manifest the walkthrough reads', () => {

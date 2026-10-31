@@ -26,7 +26,7 @@ You need:
 
 ## Using it
 
-The tab lists the project's open pull requests and takes any GitHub PR URL. `?pr=<number or URL>` on the tab's address opens one directly, and the tab reopens the review you had open last.
+The tab lists the project's open pull requests and takes any GitHub PR URL. Nothing is read or reviewed until you click Review. The tab reopens the review you had open last, as the engine kept it, without reading the PR again; **Check for new commits** reads it again with `gh`. `?pr=<number or URL>` on the tab's address does the same for a PR the engine already keeps; any other PR waits in the URL box for your click.
 
 The first time, the tab asks you to **Start the engine**. The engine is the plugin's companion service, a small server on `127.0.0.1` that does the slow work: reading the PR, the reviewer's passes, the chat, and posting. Wheelhouse starts it only on that click. It keeps running after Wheelhouse stops, and it opens a tab that closes itself.
 
@@ -50,14 +50,13 @@ Move between stages with the passage on the left, **Mark reviewed, next stop**, 
 
 Change these in **Settings → Plugins → PR review**, or under `plugins["pr-review"].settings` in Wheelhouse's `plugins.json`. The tab hands them to the engine as it connects, so they apply without restarting the engine.
 
-| Setting                 | Key              | Default                  | What it does                                                                                                                    |
-| ----------------------- | ---------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| Reviewer                | `backend`        | `claude`                 | `claude`: Claude through Claude Code. `ollama`: a local model through Ollama.                                                   |
-| Claude model            | `claudeModel`    | `sonnet`                 | The model Claude Code reviews with, such as `sonnet`, `opus` or a full model id.                                                |
-| Ollama model            | `ollamaModel`    | `qwen2.5:7b`             | The Ollama model each stage runs on, when the reviewer is Ollama.                                                               |
-| Ollama address          | `ollamaUrl`      | `http://127.0.0.1:11434` | Where Ollama answers.                                                                                                           |
-| Context window (tokens) | `contextTokens`  | `16384`                  | How much an Ollama model reads at once (Ollama's own default, 2048, is too small for a stage's diff).                           |
-| Also hide as generated  | `extraGenerated` | none                     | File names (`*` matches any part of a name), paths, or folders ending in `/`, hidden like build output (`*.gen.ts`, `schema/`). |
+| Setting                 | Key             | Default                  | What it does                                                                                          |
+| ----------------------- | --------------- | ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Reviewer                | `backend`       | `claude`                 | `claude`: Claude through Claude Code. `ollama`: a local model through Ollama.                         |
+| Claude model            | `claudeModel`   | `sonnet`                 | The model Claude Code reviews with, such as `sonnet`, `opus` or a full model id.                      |
+| Ollama model            | `ollamaModel`   | `qwen2.5:7b`             | The Ollama model each stage runs on, when the reviewer is Ollama.                                     |
+| Ollama address          | `ollamaUrl`     | `http://127.0.0.1:11434` | Where Ollama answers.                                                                                 |
+| Context window (tokens) | `contextTokens` | `16384`                  | How much an Ollama model reads at once (Ollama's own default, 2048, is too small for a stage's diff). |
 
 ### How Claude runs
 

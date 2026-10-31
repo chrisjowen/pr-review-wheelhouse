@@ -59,7 +59,6 @@ describe('the manifest', () => {
 		assert.equal(s.ollamaModel.default, DEFAULTS.ollamaModel);
 		assert.equal(s.ollamaUrl.default, DEFAULTS.ollamaUrl);
 		assert.equal(s.contextTokens.default, DEFAULTS.contextTokens);
-		assert.deepEqual(s.extraGenerated.default, DEFAULTS.extraGenerated);
 		assert.deepEqual(readSettings({}), DEFAULTS);
 	});
 
@@ -77,8 +76,7 @@ describe('the settings', () => {
 				backend: 'gpt',
 				ollamaModel: 'llama3.1',
 				ollamaUrl: 'ftp://x',
-				contextTokens: 100,
-				extraGenerated: [1]
+				contextTokens: 100
 			}),
 			{ ...DEFAULTS, ollamaModel: 'llama3.1', contextTokens: 4096 }
 		);

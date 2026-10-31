@@ -372,7 +372,8 @@ export function anchor(item, files, resolve) {
 	if (!Number.isFinite(to)) to = from;
 	if (to < from) [from, to] = [to, from];
 	if (!span || to < span.from || from > span.to) return { file: path, from: null, to: null };
-	return { file: path, from: Math.max(from, span.from), to: Math.min(to, span.to, from + 80) };
+	const lo = Math.max(from, span.from);
+	return { file: path, from: lo, to: Math.min(to, span.to, lo + 80) };
 }
 
 const pathResolver = (files, resolvePath) => (said) =>

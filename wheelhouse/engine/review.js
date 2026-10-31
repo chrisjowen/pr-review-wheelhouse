@@ -14,7 +14,7 @@
  * @typedef {import('./model.js').Model} Model
  */
 
-import { kindOf, patternMatcher } from './classify.js';
+import { kindOf } from './classify.js';
 import { excerpt, parseDiff } from './diff.js';
 import {
 	changeMessages,
@@ -46,19 +46,11 @@ export const SCHEMA = 'pr-review.v1';
  *   github: { load(url: string): Promise<{ pr: any; diff: string }>; post(pr: any, review: any): Promise<{ url: string }> };
  *   store: ReturnType<typeof import('./store.js').memoryStore>;
  *   model: () => Model;
- *   config?: () => { extraGenerated?: string[] };
  *   now?: () => number;
  *   log?: (line: string) => void;
  * }} deps
  */
-export function createReviews({
-	github,
-	store,
-	model,
-	config = () => ({}),
-	now = Date.now,
-	log = () => {}
-}) {
+export function createReviews({ github, store, model, now = Date.now, log = () => {} }) {
 	/** @type {Map<string, any>} */
 	const live = new Map();
 	/** @type {{ id: string; kind: 'stage' | 'chat'; stage: string; at: number }[]} */
@@ -99,7 +91,10 @@ export function createReviews({
 		if (!r) throw new ReviewError('There is no such review.', 404);
 		return r;
 	};
+	/** A review replaced by a restart or a new head is never written again. */
+	const isLive = (r) => live.get(r.id) === r;
 	const save = (r) => {
+		if (!isLive(r)) return;
 		r.rev = (r.rev ?? 0) + 1;
 		r.updatedAt = now();
 		store.saveReview(r);
@@ -292,6 +287,7 @@ export function createReviews({
 	}
 
 	function queueRest(r) {
+		if (!isLive(r)) return;
 		for (const s of r.stages)
 			if (s.id !== 'walkthrough' && !r.results[s.id] && r.runs[s.id]?.state !== 'running')
 				enqueue(r.id, 'stage', s.id);
@@ -360,6 +356,12 @@ export function createReviews({
 		save(r);
 	}
 
+	/** Drops a review's queued jobs and stops the one running for it. */
+	function forget(id) {
+		for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === id) queue.splice(i, 1);
+		if (currentJob?.id === id) current?.abort();
+	}
+
 	// ---------- the API ----------
 
 	return {
@@ -407,9 +409,9 @@ export function createReviews({
 				save(kept);
 				return kept;
 			}
-			const extra = patternMatcher(config().extraGenerated ?? []);
+			if (kept) forget(id);
 			const files = parseDiff(diff).map((f) => {
-				const kind = kindOf(f.path, { extraGenerated: extra });
+				const kind = kindOf(f.path);
 				return kind === 'generated' ? { ...f, kind, hunks: [] } : { ...f, kind };
 			});
 			const plan = heuristicPlan(files);
@@ -534,8 +536,7 @@ export function createReviews({
 		/** Forgets the review and starts it again from the PR as it is now. */
 		async restart(id) {
 			const r = get(id);
-			for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === id) queue.splice(i, 1);
-			if (currentJob?.id === id) current?.abort();
+			forget(id);
 			live.delete(id);
 			store.removeReview(id);
 			return this.open(r.pr.url);

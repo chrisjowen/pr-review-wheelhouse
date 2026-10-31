@@ -48,28 +48,13 @@ const CONFIG = [
 	/(^|\/)(Dockerfile|Makefile|Procfile|justfile)$/
 ];
 
-/** A matcher for the captain's own extra generated patterns: `*` matches any part of a name, `dir/` a folder. */
-export function patternMatcher(patterns = []) {
-	const res = patterns
-		.filter((p) => typeof p === 'string' && p.trim())
-		.map((p) => {
-			const t = p.trim();
-			const esc = t.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
-			if (t.endsWith('/')) return new RegExp(`(^|/)${esc}`);
-			return t.includes('/') ? new RegExp(`^${esc}$`) : new RegExp(`(^|/)${esc}$`);
-		});
-	return (path) => res.some((r) => r.test(path));
-}
-
 /**
  * @param {string} path
- * @param {{ extraGenerated?: (path: string) => boolean }} [o]
  * @returns {Kind}
  */
-export function kindOf(path, { extraGenerated } = {}) {
+export function kindOf(path) {
 	const name = path.split('/').pop() ?? path;
-	if (LOCKFILES.has(name) || GENERATED.some((r) => r.test(path)) || extraGenerated?.(path))
-		return 'generated';
+	if (LOCKFILES.has(name) || GENERATED.some((r) => r.test(path))) return 'generated';
 	if (ASSET.test(path)) return 'asset';
 	if (TEST.some((r) => r.test(path))) return 'test';
 	if (DOCS.some((r) => r.test(path))) return 'docs';
