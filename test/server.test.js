@@ -44,7 +44,7 @@ describe('the open pull requests', () => {
 					calls.push(req);
 					return { ok: true, stdout: JSON.stringify(prs) };
 				},
-				{ model: 'llama3.1' }
+				{ backend: 'ollama' }
 			)
 		);
 		assert.equal(calls[0].cwd, 'project');
@@ -59,7 +59,7 @@ describe('the open pull requests', () => {
 			]
 		);
 		assert.equal(r.value.reason, null);
-		assert.equal(r.value.settings.model, 'llama3.1');
+		assert.equal(r.value.settings.backend, 'ollama');
 		assert.equal(r.value.project, 'docket');
 	});
 
@@ -94,7 +94,7 @@ describe('the engine service', () => {
 	it('runs this repository’s engine with node on loopback, on a port Wheelhouse keeps', async () => {
 		const asked = [];
 		const r = await service.resolve({
-			settings: { model: 'llama3.1', contextTokens: 8192 },
+			settings: { claudeModel: 'opus', contextTokens: 8192 },
 			servicePort: async (p) => (asked.push(p), 4799)
 		});
 		assert.equal(asked[0], 4791);
@@ -111,14 +111,18 @@ describe('the engine service', () => {
 		assert.deepEqual(r.spec.argv.slice(2), [
 			'--port',
 			'4799',
-			'--model',
-			'llama3.1',
+			'--backend',
+			'claude',
+			'--claude-model',
+			'opus',
+			'--ollama-model',
+			'qwen2.5:7b',
 			'--ollama',
 			'http://127.0.0.1:11434',
 			'--context',
 			'8192'
 		]);
 		assert.equal(r.spec.cwd, ROOT);
-		assert.match(r.hint, /main\.js --port 4799 --model llama3\.1$/);
+		assert.match(r.hint, /main\.js --port 4799 --backend claude$/);
 	});
 });

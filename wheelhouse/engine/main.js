@@ -2,20 +2,27 @@
 /**
  * The review engine: a small HTTP server on loopback that Wheelhouse starts as
  * the plugin's companion service when the captain clicks Start. It reads pull
- * requests with `gh`, runs each review stage through the local model, keeps
- * reviews and prompts in its state directory, and posts a review to GitHub
- * only when the captain clicks Post.
+ * requests with `gh`, runs each review stage through the reviewer (Claude
+ * through Claude Code by default, or a local Ollama model), keeps reviews and
+ * prompts in its state directory, and posts a review to GitHub only when the
+ * captain clicks Post.
  *
- *   node wheelhouse/engine/main.js --port 4791 [--model qwen2.5:7b] [--ollama http://127.0.0.1:11434] [--context 16384]
+ *   node wheelhouse/engine/main.js --port 4791 [--backend claude|ollama] [--claude-model sonnet]
+ *     [--ollama-model qwen2.5:7b] [--ollama http://127.0.0.1:11434] [--context 16384]
+ *
+ * `PR_REVIEW_CLAUDE_CONFIG_DIR` sets the Claude Code config directory the
+ * reviewer runs with (`default` for Claude Code's own default), for a
+ * Wheelhouse whose own `CLAUDE_CONFIG_DIR` points elsewhere.
  */
 
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { createServer } from 'node:http';
 import { parseArgs } from 'node:util';
 import { readSettings } from './config.js';
 import { createGitHub, ghRunner } from './github.js';
 import { createHandler } from './http.js';
-import { createOllama } from './model.js';
+import { createClaude, createOllama } from './model.js';
 import { createReviews } from './review.js';
 import { createStore, defaultStateDir } from './store.js';
 
@@ -23,7 +30,9 @@ const { values } = parseArgs({
 	options: {
 		port: { type: 'string', default: '4791' },
 		host: { type: 'string', default: '127.0.0.1' },
-		model: { type: 'string' },
+		backend: { type: 'string' },
+		'claude-model': { type: 'string' },
+		'ollama-model': { type: 'string' },
 		ollama: { type: 'string' },
 		context: { type: 'string' },
 		'state-dir': { type: 'string' }
@@ -35,34 +44,40 @@ const version = JSON.parse(
 ).version;
 const log = (line) => process.stdout.write(`${new Date().toISOString()} ${line}\n`);
 
+const store = createStore(values['state-dir'] || defaultStateDir());
+
+/** The reviewer the settings name. */
+function reviewer(s) {
+	if (s.backend === 'ollama')
+		return createOllama({ url: s.ollamaUrl, model: s.ollamaModel, contextTokens: s.contextTokens });
+	const env = { ...process.env };
+	const dir = process.env.PR_REVIEW_CLAUDE_CONFIG_DIR;
+	if (dir === 'default') delete env.CLAUDE_CONFIG_DIR;
+	else if (dir) env.CLAUDE_CONFIG_DIR = dir;
+	return createClaude({ model: s.claudeModel, cwd: path.join(store.dir, 'claude'), env });
+}
+
 let settings = readSettings({
-	model: values.model,
+	backend: values.backend,
+	claudeModel: values['claude-model'],
+	ollamaModel: values['ollama-model'],
 	ollamaUrl: values.ollama,
 	contextTokens: values.context
 });
-let model = createOllama({
-	url: settings.ollamaUrl,
-	model: settings.model,
-	contextTokens: settings.contextTokens
-});
+let model = reviewer(settings);
 const config = {
 	get: () => settings,
 	set(next) {
 		const merged = readSettings({ ...settings, ...(next && typeof next === 'object' ? next : {}) });
 		if (JSON.stringify(merged) !== JSON.stringify(settings)) {
 			settings = merged;
-			model = createOllama({
-				url: settings.ollamaUrl,
-				model: settings.model,
-				contextTokens: settings.contextTokens
-			});
+			model = reviewer(settings);
 			log(`settings: ${JSON.stringify(settings)}`);
 		}
 		return settings;
 	}
 };
 
-const store = createStore(values['state-dir'] || defaultStateDir());
 const reviews = createReviews({
 	github: createGitHub(ghRunner()),
 	store,
@@ -84,7 +99,7 @@ if (values.host !== '127.0.0.1' && values.host !== 'localhost' && values.host !=
 }
 server.listen(Number(values.port), values.host, () => {
 	log(
-		`pr-review engine ${version} on http://${values.host}:${values.port}/ (model ${settings.model}, state ${store.dir})`
+		`pr-review engine ${version} on http://${values.host}:${values.port}/ (reviewer ${model.name}, state ${store.dir})`
 	);
 });
 const quit = () => {

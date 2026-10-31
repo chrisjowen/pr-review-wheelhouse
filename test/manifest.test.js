@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import Ajv2020 from 'ajv/dist/2020.js';
-import { DEFAULTS, readSettings } from '../wheelhouse/engine/config.js';
+import { DEFAULTS, readSettings, reviewerLabel } from '../wheelhouse/engine/config.js';
 import plugin from '../wheelhouse/server/index.js';
 
 const manifest = JSON.parse(
@@ -50,7 +50,13 @@ describe('the manifest', () => {
 
 	it('offers the same defaults the code falls back to', () => {
 		const s = manifest.wheelhouse.settings;
-		assert.equal(s.model.default, DEFAULTS.model);
+		assert.equal(s.backend.default, DEFAULTS.backend);
+		assert.deepEqual(
+			s.backend.options.map((o) => o.value),
+			['claude', 'ollama']
+		);
+		assert.equal(s.claudeModel.default, DEFAULTS.claudeModel);
+		assert.equal(s.ollamaModel.default, DEFAULTS.ollamaModel);
 		assert.equal(s.ollamaUrl.default, DEFAULTS.ollamaUrl);
 		assert.equal(s.contextTokens.default, DEFAULTS.contextTokens);
 		assert.deepEqual(s.extraGenerated.default, DEFAULTS.extraGenerated);
@@ -65,19 +71,27 @@ describe('the manifest', () => {
 
 describe('the settings', () => {
 	it('fall back one by one when missing or of the wrong kind', () => {
+		assert.equal(DEFAULTS.backend, 'claude', 'Claude reviews unless told otherwise');
 		assert.deepEqual(
 			readSettings({
-				model: 'llama3.1',
+				backend: 'gpt',
+				ollamaModel: 'llama3.1',
 				ollamaUrl: 'ftp://x',
 				contextTokens: 100,
 				extraGenerated: [1]
 			}),
-			{ ...DEFAULTS, model: 'llama3.1', contextTokens: 4096 }
+			{ ...DEFAULTS, ollamaModel: 'llama3.1', contextTokens: 4096 }
 		);
-		assert.equal(readSettings({ model: 'bad model; rm -rf' }).model, DEFAULTS.model);
+		assert.equal(readSettings({ backend: 'ollama' }).backend, 'ollama');
+		assert.equal(
+			readSettings({ claudeModel: 'bad model; rm -rf' }).claudeModel,
+			DEFAULTS.claudeModel
+		);
 		assert.equal(
 			readSettings({ ollamaUrl: 'http://127.0.0.1:11500/api' }).ollamaUrl,
 			'http://127.0.0.1:11500'
 		);
+		assert.equal(reviewerLabel(DEFAULTS), 'Claude (sonnet)');
+		assert.equal(reviewerLabel({ ...DEFAULTS, backend: 'ollama' }), 'qwen2.5:7b');
 	});
 });

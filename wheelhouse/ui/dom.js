@@ -100,15 +100,27 @@ export function inline(text) {
 	return out;
 }
 
-/** Paragraphs and simple lists from the model's text. */
+/**
+ * Paragraphs, headings and simple lists from Markdown-ish text (the model's,
+ * or a PR description). HTML tags in it are dropped as text, never parsed.
+ */
 export function rich(text) {
 	const blocks = String(text ?? '')
 		.replace(/\r/g, '')
+		.replace(/<\/?(?:code|details|summary|br|p|div|span|b|i|em|strong|sub|sup|kbd)\b[^>]*>/gi, '')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&#39;/g, "'")
+		.replace(/&quot;/g, '"')
+		.replace(/&amp;/g, '&')
+		.replace(/^(#{1,6} .*)$/gm, '\n$1\n')
 		.split(/\n{2,}/)
 		.map((b) => b.trim())
 		.filter(Boolean);
 	return blocks.map((b) => {
 		const lines = b.split('\n');
+		if (lines.length === 1 && /^#{1,6}\s+/.test(b))
+			return h('h4', {}, inline(b.replace(/^#{1,6}\s+/, '')));
 		if (lines.every((l) => /^\s*([-*•]|\d+[.)])\s+/.test(l))) {
 			const ordered = /^\s*\d/.test(lines[0]);
 			return h(
@@ -144,6 +156,8 @@ const TOKEN =
 export function highlight(line, lang) {
 	const s = String(line ?? '');
 	if (lang === 'plain') return [s];
+	// A block comment's own lines (`/**`, ` * …`, ` */`) are comment throughout.
+	if (lang === 'c' && /^\s*(\/\*|\*(\s|\/|$))/.test(s)) return [h('span', { class: 'tk-c' }, s)];
 	const out = [];
 	let at = 0;
 	for (const m of s.matchAll(TOKEN)) {

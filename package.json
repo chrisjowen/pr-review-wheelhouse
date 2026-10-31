@@ -2,7 +2,7 @@
 	"name": "pr-review-wheelhouse",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Wheelhouse plugin: review a pull request as a guided, staged discussion with a local model.",
+	"description": "Wheelhouse plugin: review a pull request as a guided, staged discussion with Claude or a local model.",
 	"license": "MIT",
 	"author": "Chris Owen",
 	"repository": "github:chrisjowen/pr-review-wheelhouse",

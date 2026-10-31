@@ -69,7 +69,7 @@ const DATA = {
 		}
 	],
 	reason: null,
-	settings: { model: 'fake:7b' }
+	settings: { backend: 'ollama', ollamaModel: 'fake:7b', claudeModel: 'sonnet' }
 };
 
 function mount(host) {
@@ -263,5 +263,29 @@ describe('a review in the tab', () => {
 		button(el, 'Prompts').click();
 		await until(() => $$(el, '.field textarea').length === 5);
 		assert.match($$(el, '.field label')[0].textContent, /Overall review prompt/);
+	});
+});
+
+describe('placing notes on a long hunk', () => {
+	it('cuts the hunk where each note starts', async () => {
+		const { splitAtNotes } = await import('../wheelhouse/ui/index.js');
+		const lines = Array.from({ length: 10 }, (_, i) => ({ t: '+', n: i + 1, text: `l${i + 1}` }));
+		const parts = splitAtNotes(lines, [
+			{ id: 'b', from: 6, to: 7 },
+			{ id: 'a', from: 3, to: 4 },
+			{ id: 'c', from: 6, to: 6 }
+		]);
+		assert.deepEqual(
+			parts.map((p) => [p.notes.map((n) => n.id).join(''), p.lines[0].n, p.lines.at(-1).n]),
+			[
+				['', 1, 2],
+				['a', 3, 5],
+				['bc', 6, 10]
+			]
+		);
+		assert.deepEqual(
+			splitAtNotes(lines, [{ id: 'a', from: 1, to: 2 }]).map((p) => p.notes.length),
+			[1]
+		);
 	});
 });

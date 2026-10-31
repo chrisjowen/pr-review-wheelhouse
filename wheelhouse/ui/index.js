@@ -135,11 +135,22 @@ export class PrReviewTab extends HTMLElement {
 		return this.entry?.projectId ?? this._data?.project ?? 'fleet';
 	}
 
-	/** The tab fills the page below where it starts, so each column scrolls on its own. */
+	/**
+	 * The tab fills the page below where it starts, so each column scrolls on
+	 * its own: as tall as the window allows, less whatever Wheelhouse draws
+	 * under it (its source line and padding), measured as the overflow of the
+	 * page's scrolling area.
+	 */
 	size() {
-		const top = this.getBoundingClientRect().top;
-		const room = Math.max(520, window.innerHeight - Math.max(0, top) - 4);
+		const top = Math.max(0, this.getBoundingClientRect().top);
+		const room = Math.max(480, window.innerHeight - top);
 		this.style.setProperty('--rv-height', `${room}px`);
+		const scroller = scrollerOf(this);
+		const over = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
+		// A flex parent may give the tab less than that; then its own box is the room there is.
+		const given = this.getBoundingClientRect().height;
+		const fit = Math.max(480, Math.min(room - Math.max(0, over), given >= 480 ? given : room));
+		if (fit !== room) this.style.setProperty('--rv-height', `${fit}px`);
 	}
 
 	// ---------- the engine ----------
@@ -397,9 +408,22 @@ export class PrReviewTab extends HTMLElement {
 		if (!this.root) return;
 		const r = this.s.review;
 		if (!r) {
+			if (this.el) this.prints = {};
 			this.el = null;
-			this.prints = {};
+			const e = this.s.engine;
+			const shown = [
+				this._data,
+				e?.state,
+				e?.reason,
+				e?.launchable,
+				this.s.recent,
+				this.s.opening,
+				this.s.error
+			];
+			if (!this.changed('picker', shown) && this.root.firstChild) return this.renderOverlays();
+			const typing = this.shadowRoot.activeElement?.dataset?.key === 'pr-url';
 			this.root.replaceChildren(this.picker(), h('div', { class: 'overlays' }));
+			if (typing) this.root.querySelector('[data-key="pr-url"]')?.focus();
 			this.renderOverlays();
 			this.size();
 			return;
@@ -672,7 +696,7 @@ export class PrReviewTab extends HTMLElement {
 	/** The banner while a stage's pass is queued, running or failed; null once it answered. */
 	status(r, stage) {
 		const run = r.runs[stage.id];
-		const model = run?.model || this._data?.settings?.model || 'the local model';
+		const model = run?.model || this.modelName();
 		if (r.results[stage.id] && run?.state !== 'running' && run?.state !== 'failed') return null;
 		if (run?.state === 'failed')
 			return h(
@@ -705,7 +729,9 @@ export class PrReviewTab extends HTMLElement {
 					{},
 					`${model} is reading this stage`,
 					h('span', { 'data-tokens': '' }),
-					'. The code is below meanwhile.'
+					stage.kind === 'walkthrough'
+						? '. The PR’s own description is below meanwhile.'
+						: '. The code is below meanwhile.'
 				)
 			);
 		if (run?.state === 'queued')
@@ -859,7 +885,7 @@ export class PrReviewTab extends HTMLElement {
 					h(
 						'p',
 						{ class: 'aside-note' },
-						`${this.modelName()} reads text only, so it hasn’t seen these; they come straight from the PR description.`
+						`${this.modelName()} reads the PR as text here, so it hasn’t seen these; they come straight from the PR description.`
 					)
 				)
 			);
@@ -980,8 +1006,11 @@ export class PrReviewTab extends HTMLElement {
 		return h('section', { class: 'section' }, h('h2', {}, title), body);
 	}
 
+	/** The reviewer in plain words: "Claude (sonnet)" or the Ollama model's name. */
 	modelName() {
-		return this._data?.settings?.model || 'The local model';
+		const s = this._data?.settings;
+		if (!s) return 'The reviewer';
+		return s.backend === 'ollama' ? s.ollamaModel : `Claude (${s.claudeModel})`;
 	}
 
 	filesSection(r) {
@@ -1305,16 +1334,18 @@ export class PrReviewTab extends HTMLElement {
 			loose.map((n) =>
 				h('div', { class: 'hunk' }, this.note(n, stage), h('div', { class: 'code' }))
 			),
-			hunks.map(({ hk, here }) =>
-				h(
-					'div',
-					{ class: 'hunk' },
-					here.map((n) => this.note(n, stage)),
-					this.code(file, hk.lines, {
-						hot: here.map((n) => [n.from, n.to]),
-						stage,
-						header: hk.header
-					})
+			hunks.flatMap(({ hk, here }) =>
+				splitAtNotes(hk.lines, here).map((part, i) =>
+					h(
+						'div',
+						{ class: 'hunk' },
+						part.notes.map((n) => this.note(n, stage)),
+						this.code(file, part.lines, {
+							hot: here.map((n) => [n.from, n.to]),
+							stage,
+							header: i === 0 ? hk.header : null
+						})
+					)
 				)
 			)
 		);
@@ -1567,7 +1598,9 @@ export class PrReviewTab extends HTMLElement {
 						'p',
 						{ class: 'chat-status' },
 						h('span', { class: `dot${engineOk ? '' : ' off'}` }),
-						`${this.modelName()} on this computer`
+						this._data?.settings?.backend === 'ollama'
+							? `${this.modelName()} on this computer`
+							: `${this.modelName()} through Claude Code`
 					)
 				)
 			);
@@ -1749,7 +1782,7 @@ export class PrReviewTab extends HTMLElement {
 			h(
 				'p',
 				{ class: 'lede' },
-				'A walkthrough first, then a quality pass, then the important changes a few files at a time, then a skim of the rest, with a local model to talk each stage through.'
+				'A walkthrough first, then a quality pass, then the important changes a few files at a time, then a skim of the rest, with a reviewer to talk each stage through.'
 			)
 		];
 		if (!running) out.push(this.engineCard(e));
@@ -1758,8 +1791,12 @@ export class PrReviewTab extends HTMLElement {
 			name: 'url',
 			placeholder: 'https://github.com/owner/repo/pull/123',
 			'aria-label': 'Pull request URL',
-			required: true
+			'data-key': 'pr-url',
+			required: true,
+			// The picker redraws as the engine and PR list change; what was typed stays.
+			oninput: () => (this.s.typed = input.value)
 		});
+		input.value = this.s.typed ?? '';
 		out.push(
 			h(
 				'form',
@@ -1901,7 +1938,7 @@ export class PrReviewTab extends HTMLElement {
 							? `Something else is answering on the engine’s port (${e.url}).`
 							: state === 'failed'
 								? `The review engine didn’t start: ${e.reason ?? 'see its log'}`
-								: 'The review engine isn’t running. It reads pull requests with gh and talks to Ollama on this computer; start it to review.';
+								: 'The review engine isn’t running. It reads pull requests with gh and runs the reviewer (Claude Code, or Ollama) on this computer; start it to review.';
 		return h(
 			'div',
 			{ class: 'card engine-card' },
@@ -2017,7 +2054,7 @@ export class PrReviewTab extends HTMLElement {
 				h(
 					'p',
 					{ class: 'drawer-note' },
-					'What the local model is told at each stage: the overall prompt first, then the stage’s own. Saved for every review as you type; use “Read again” on a stage to hear its new answer.'
+					'What the reviewer is told at each stage: the overall prompt first, then the stage’s own. Saved for every review as you type; use “Read again” on a stage to hear its new answer.'
 				),
 				!d.prompts
 					? h('p', { class: 'dim' }, 'Loading…')
@@ -2057,7 +2094,7 @@ export class PrReviewTab extends HTMLElement {
 					h(
 						'span',
 						{ class: 'dim' },
-						`Model: ${this.modelName()} (Settings → Plugins → PR review)`
+						`Reviewer: ${this.modelName()} (Settings → Plugins → PR review)`
 					),
 					this.s.review
 						? h(
@@ -2328,6 +2365,36 @@ function excerptOf(file, from, to) {
 		i = j - 1;
 	}
 	return flat.filter((_, i) => inc[i]);
+}
+
+/**
+ * A hunk cut where each note starts, so a note sits right above its lines
+ * even in a long new file: `[{ notes, lines }]`, the first part holding the
+ * lines before any note.
+ */
+export function splitAtNotes(lines, notes) {
+	const sorted = [...notes].sort((a, b) => a.from - b.from);
+	const parts = [{ notes: [], lines: [] }];
+	let k = 0;
+	for (const l of lines) {
+		while (k < sorted.length && l.n !== undefined && l.n >= sorted[k].from) {
+			const last = parts.at(-1);
+			if (last.lines.length || !last.notes.length) parts.push({ notes: [sorted[k]], lines: [] });
+			else last.notes.push(sorted[k]);
+			k++;
+		}
+		parts.at(-1).lines.push(l);
+	}
+	return parts.filter((p) => p.lines.length || p.notes.length);
+}
+
+/** The nearest ancestor that scrolls (or the page's own scrolling element). */
+function scrollerOf(el) {
+	for (let p = el.parentElement; p; p = p.parentElement) {
+		const o = window.getComputedStyle(p).overflowY;
+		if ((o === 'auto' || o === 'scroll') && p.scrollHeight > p.clientHeight) return p;
+	}
+	return document.scrollingElement;
 }
 
 function newSpan(hunk) {

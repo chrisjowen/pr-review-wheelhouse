@@ -68,7 +68,7 @@ code, .mono { font-family: var(--rv-mono); font-size: .86em; font-variant-ligatu
 .ghost-btn:hover { background: var(--accent, rgba(0,0,0,.04)); }
 
 /* ---------- layout ---------- */
-.layout { display: grid; grid-template-columns: 236px minmax(0, 1fr) 380px; flex: 1 1 auto; min-height: 0; }
+.layout { display: grid; grid-template-columns: 236px minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .rail { border-right: 1px solid var(--rv-hair); display: flex; flex-direction: column; padding: 16px 0 14px; min-height: 0; }
 .eyebrow { margin: 0; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--rv-muted); font-weight: 500; }
 .rail .eyebrow { padding: 0 20px 8px; }
@@ -97,7 +97,7 @@ code, .mono { font-family: var(--rv-mono); font-size: .86em; font-variant-ligatu
 kbd { font-family: var(--rv-mono); font-size: 11px; padding: 0 5px; border: 1px solid var(--rv-rule); border-bottom-width: 2px; border-radius: 4px; background: var(--rv-card); }
 
 /* ---------- stage ---------- */
-.stage { overflow-y: auto; padding: 26px 36px 80px; min-width: 0; outline: none; }
+.stage { overflow-y: auto; padding: 26px 36px 80px; min-width: 0; min-height: 0; outline: none; }
 .stage-inner { max-width: 960px; margin: 0 auto; }
 .stage-head { margin-bottom: 20px; }
 .stage-head h1 { font-family: var(--rv-serif); font-weight: 400; font-size: 30px; line-height: 1.18; margin: 6px 0 10px; }
@@ -249,7 +249,7 @@ figure { margin: 0; }
 .chat-status { margin: 0; font-size: 12px; color: var(--rv-muted); }
 .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--rv-ok); margin-right: 5px; vertical-align: 1px; }
 .dot.off { background: var(--rv-bad); }
-.chat-log { flex: 1; overflow-y: auto; padding: 14px 16px 8px; scrollbar-width: none; }
+.chat-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px 16px 8px; scrollbar-width: none; }
 .chat-log::-webkit-scrollbar { display: none; }
 .divider { display: flex; align-items: center; gap: 10px; margin: 6px 0 12px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--rv-muted); }
 .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--rv-hair); }

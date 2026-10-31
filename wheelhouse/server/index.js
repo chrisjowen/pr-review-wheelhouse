@@ -5,7 +5,7 @@
  * Wheelhouse's side is small and read-only. The `prs` provider lists the
  * project's open pull requests (one `gh pr list` in the clone) and hands the
  * tab the plugin's settings. Everything slow or that writes (reading a PR's
- * diff, the model passes, the chat, the captain's prompts and reviews, posting
+ * diff, the reviewer's passes, the chat, the captain's prompts and reviews, posting
  * a review) lives in the companion `engine` service: a loopback HTTP server
  * from this repository that Wheelhouse starts only when the captain clicks
  * Start in the tab, and that the tab talks to directly.
@@ -95,8 +95,12 @@ async function resolve(ctx) {
 		ENGINE,
 		'--port',
 		String(port),
-		'--model',
-		s.model,
+		'--backend',
+		s.backend,
+		'--claude-model',
+		s.claudeModel,
+		'--ollama-model',
+		s.ollamaModel,
 		'--ollama',
 		s.ollamaUrl,
 		'--context',
@@ -105,6 +109,8 @@ async function resolve(ctx) {
 	const env = {};
 	if (process.env.PR_REVIEW_STATE_DIR) env.PR_REVIEW_STATE_DIR = process.env.PR_REVIEW_STATE_DIR;
 	if (process.env.XDG_STATE_HOME) env.XDG_STATE_HOME = process.env.XDG_STATE_HOME;
+	if (process.env.PR_REVIEW_CLAUDE_CONFIG_DIR)
+		env.PR_REVIEW_CLAUDE_CONFIG_DIR = process.env.PR_REVIEW_CLAUDE_CONFIG_DIR;
 	return {
 		available: true,
 		spec: {
@@ -117,7 +123,7 @@ async function resolve(ctx) {
 			binds: 'loopback',
 			readyTimeoutMs: 15_000
 		},
-		hint: `node ${ENGINE} --port ${port} --model ${s.model}`
+		hint: `node ${ENGINE} --port ${port} --backend ${s.backend}`
 	};
 }
 
