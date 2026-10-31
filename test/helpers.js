@@ -262,6 +262,8 @@ export const ANSWERS = {
 			.at(-1)
 			.content.match(/Its files: (.*)/)[1]
 			.split(', ');
+		// The first added line of the stop's diff, so the note sits on real lines.
+		const first = Number(messages.at(-1).content.match(/\n\s+(\d+) \+ /)?.[1] ?? 12);
 		return {
 			take: [`About ${files.join(' and ')}.`],
 			complexity: 'Complex!',
@@ -269,8 +271,8 @@ export const ANSWERS = {
 			notes: [
 				{
 					file: files[0],
-					from: 12,
-					to: 20,
+					from: first,
+					to: first + 4,
 					tag: 'moderate',
 					title: 'The core',
 					body: 'Does things.',

@@ -5,7 +5,12 @@ export default [
 	{ ignores: ['node_modules/'] },
 	js.configs.recommended,
 	{
-		files: ['wheelhouse/server/**/*.js', 'wheelhouse/engine/**/*.js', 'test/**/*.js', 'eslint.config.js'],
+		files: [
+			'wheelhouse/server/**/*.js',
+			'wheelhouse/engine/**/*.js',
+			'test/**/*.js',
+			'eslint.config.js'
+		],
 		languageOptions: { globals: globals.node }
 	},
 	{

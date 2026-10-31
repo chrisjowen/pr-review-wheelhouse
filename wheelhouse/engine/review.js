@@ -393,7 +393,7 @@ export function createReviews({
 		async open(url) {
 			const { pr, diff } = await github.load(url);
 			const id = `${pr.owner}__${pr.repo}__${pr.number}`;
-			let kept = null;
+			let kept;
 			try {
 				kept = get(id);
 			} catch {
