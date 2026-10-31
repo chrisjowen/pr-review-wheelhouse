@@ -1,0 +1,70 @@
+{
+	"$schema": "https://raw.githubusercontent.com/chrisjowen/wheelhouse/main/packages/plugin-sdk/plugin.schema.json",
+	"name": "pr-review",
+	"displayName": "PR review",
+	"version": "0.1.0",
+	"description": "A project tab that reviews a pull request as a guided, staged discussion: a walkthrough, a quality pass, the key changes a few files at a time, then a skim pile, with a chat beside the code. Claude (through Claude Code) reviews by default, or a local Ollama model. The review is posted to GitHub or sent to Firstmate only when you click.",
+	"author": {
+		"name": "Chris Owen",
+		"url": "https://github.com/chrisjowen"
+	},
+	"repository": "https://github.com/chrisjowen/pr-review-wheelhouse",
+	"license": "MIT",
+	"keywords": ["github", "review", "claude", "ollama"],
+	"wheelhouse": {
+		"apiVersion": 1,
+		"server": "wheelhouse/server/index.js",
+		"ui": "wheelhouse/ui/index.js",
+		"enabledByDefault": false,
+		"contributions": [
+			{
+				"id": "review",
+				"slot": "project.tab"
+			}
+		],
+		"services": [
+			{
+				"id": "engine",
+				"scope": "fleet"
+			}
+		],
+		"settings": {
+			"backend": {
+				"title": "Reviewer",
+				"description": "Who reviews: Claude through Claude Code’s headless mode (claude -p, with none of your hooks, tools or MCP servers), or a local model through Ollama.",
+				"default": "claude",
+				"options": [
+					{
+						"value": "claude",
+						"label": "Claude (Claude Code)"
+					},
+					{
+						"value": "ollama",
+						"label": "A local model (Ollama)"
+					}
+				]
+			},
+			"claudeModel": {
+				"title": "Claude model",
+				"description": "The model Claude Code reviews with, such as sonnet, opus or a full model id.",
+				"default": "sonnet"
+			},
+			"ollamaModel": {
+				"title": "Ollama model",
+				"description": "The Ollama model each stage runs on when the reviewer is Ollama, such as qwen2.5:7b or llama3.1.",
+				"default": "qwen2.5:7b"
+			},
+			"ollamaUrl": {
+				"title": "Ollama address",
+				"description": "Where Ollama answers on this computer, when the reviewer is Ollama.",
+				"default": "http://127.0.0.1:11434"
+			},
+			"contextTokens": {
+				"title": "Context window (tokens)",
+				"description": "How much an Ollama model reads at once: at least 4096. Bigger reads more of a stage’s diff but needs more memory.",
+				"type": "number",
+				"default": 16384
+			}
+		}
+	}
+}
