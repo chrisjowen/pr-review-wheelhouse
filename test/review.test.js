@@ -414,21 +414,7 @@ describe('starting a review over', () => {
 	});
 
 	it('is not undone by a pass that was still running for the old review', async () => {
-		const base = fakeModel(ANSWERS);
-		let started;
-		const running = new Promise((res) => (started = res));
-		let held = false;
-		const model = {
-			...base,
-			generate(o) {
-				if (held || stageOfMessages(o.messages) !== 'quality') return base.generate(o);
-				held = true;
-				started();
-				return new Promise((_res, rej) =>
-					o.signal.addEventListener('abort', () => rej(new Error('stopped')))
-				);
-			}
-		};
+		const { model, running } = holding('quality');
 		const { reviews, store } = setup({ model });
 		await reviews.open(PR_URL);
 		await running;
@@ -442,4 +428,40 @@ describe('starting a review over', () => {
 		assert.equal(store.review(ID).openedAt, r.openedAt);
 		assert.deepEqual(store.review(ID).decisions, {});
 	});
+
+	it('runs the new walkthrough when the head moves while the old one is running', async () => {
+		const { model, running } = holding('walkthrough');
+		const view = sampleView();
+		const { reviews, store } = setup({ model, gh: fakeGh({ view }) });
+		await reviews.open(PR_URL);
+		await running;
+		view.headRefOid = 'b'.repeat(40);
+		const r = await reviews.open(PR_URL);
+		await reviews.settled();
+		assert.equal(reviews.view(ID), r);
+		assert.equal(r.runs.walkthrough.state, 'done');
+		assert.equal(r.results.walkthrough.headline, ANSWERS.walkthrough.headline);
+		assert.equal(store.review(ID).pr.headSha, 'b'.repeat(40));
+		assert.equal(store.review(ID).runs.walkthrough.state, 'done');
+	});
 });
+
+/** A model whose first pass for `stage` runs until it is stopped. */
+function holding(stage) {
+	const base = fakeModel(ANSWERS);
+	let started;
+	const running = new Promise((res) => (started = res));
+	let held = false;
+	const model = {
+		...base,
+		generate(o) {
+			if (held || stageOfMessages(o.messages) !== stage) return base.generate(o);
+			held = true;
+			started();
+			return new Promise((_res, rej) =>
+				o.signal.addEventListener('abort', () => rej(new Error('stopped')))
+			);
+		}
+	};
+	return { model, running };
+}

@@ -53,7 +53,8 @@ export const SCHEMA = 'pr-review.v1';
 export function createReviews({ github, store, model, now = Date.now, log = () => {} }) {
 	/** @type {Map<string, any>} */
 	const live = new Map();
-	/** @type {{ id: string; kind: 'stage' | 'chat'; stage: string; at: number }[]} */
+	/** Each job holds the review it was queued for, so a replaced review's jobs never touch the new one. */
+	/** @type {{ id: string; r: any; kind: 'stage' | 'chat'; stage: string; at: number }[]} */
 	const queue = [];
 	/** Which stage the captain is looking at, per review, so it runs first. */
 	const focus = new Map();
@@ -110,23 +111,11 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 	// ---------- the queue ----------
 
 	function enqueue(id, kind, stage) {
-		if (
-			kind === 'stage' &&
-			queue.some((j) => j.id === id && j.kind === 'stage' && j.stage === stage)
-		)
-			return;
-		if (
-			kind === 'stage' &&
-			currentJob?.id === id &&
-			currentJob.kind === 'stage' &&
-			currentJob.stage === stage
-		)
-			return;
-		queue.push({ id, kind, stage, at: now() });
-		if (kind === 'stage') {
-			const r = get(id);
-			r.runs[stage] = { state: 'queued', tokens: 0, model: null, at: now() };
-		}
+		const r = get(id);
+		const same = (j) => j?.r === r && j.kind === 'stage' && j.stage === stage;
+		if (kind === 'stage' && (queue.some(same) || same(currentJob))) return;
+		queue.push({ id, r, kind, stage, at: now() });
+		if (kind === 'stage') r.runs[stage] = { state: 'queued', tokens: 0, model: null, at: now() };
 		void pump();
 	}
 
@@ -137,9 +126,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 			if (j.kind === 'chat') return [0, j.at];
 			if (focus.get(j.id) === j.stage) return [1, j.at];
 			if (j.stage === 'walkthrough') return [2, j.at];
-			const r = live.get(j.id);
-			const i = r ? r.stages.findIndex((s) => s.id === j.stage) : 99;
-			return [3, i];
+			return [3, j.r.stages.findIndex((s) => s.id === j.stage)];
 		};
 		let best = 0;
 		for (let i = 1; i < queue.length; i++) {
@@ -159,8 +146,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				currentJob = job;
 				current = new AbortController();
 				try {
-					if (job.kind === 'stage') await runStage(job.id, job.stage, current.signal);
-					else await runChat(job.id, job.stage, current.signal);
+					if (job.kind === 'stage') await runStage(job.r, job.stage, current.signal);
+					else await runChat(job.r, job.stage, current.signal);
 				} catch (e) {
 					log(`job ${job.kind} ${job.id} ${job.stage} failed: ${e?.stack || e}`);
 				}
@@ -176,8 +163,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 
 	// ---------- stages ----------
 
-	async function runStage(id, stageId, signal) {
-		const r = get(id);
+	async function runStage(r, stageId, signal) {
+		if (!isLive(r)) return;
 		const stage = r.stages.find((s) => s.id === stageId);
 		if (!stage) return;
 		const m = model();
@@ -224,11 +211,13 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				}
 			});
 		} catch (e) {
+			if (!isLive(r)) return;
 			r.runs[stageId] = { ...run, state: 'failed', reason: e.message };
 			if (stage.kind === 'walkthrough' && !Object.keys(r.results).length) queueRest(r);
 			save(r);
 			return;
 		}
+		if (!isLive(r)) return;
 		const raw = parseJson(out.text);
 		const finished = {
 			...run,
@@ -287,7 +276,6 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 	}
 
 	function queueRest(r) {
-		if (!isLive(r)) return;
 		for (const s of r.stages)
 			if (s.id !== 'walkthrough' && !r.results[s.id] && r.runs[s.id]?.state !== 'running')
 				enqueue(r.id, 'stage', s.id);
@@ -295,8 +283,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 
 	// ---------- chat ----------
 
-	async function runChat(id, stageId, signal) {
-		const r = get(id);
+	async function runChat(r, stageId, signal) {
+		if (!isLive(r)) return;
 		const stage = r.stages.find((s) => s.id === stageId);
 		const list = r.chat[stageId] ?? [];
 		const reply = list.findLast((x) => x.role === 'assistant' && x.pending);
@@ -352,6 +340,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 			reply.text = `I couldn’t answer: ${e.message}`;
 			reply.error = true;
 		}
+		if (!isLive(r)) return;
 		reply.pending = false;
 		save(r);
 	}
