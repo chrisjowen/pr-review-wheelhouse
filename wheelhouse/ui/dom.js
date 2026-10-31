@@ -117,22 +117,31 @@ export function rich(text) {
 		.split(/\n{2,}/)
 		.map((b) => b.trim())
 		.filter(Boolean);
-	return blocks.map((b) => {
+	const ITEM = /^\s*([-*•]|\d+[.)])\s+/;
+	return blocks.flatMap((b) => {
 		const lines = b.split('\n');
 		if (lines.length === 1 && /^#{1,6}\s+/.test(b))
 			return h('h4', {}, inline(b.replace(/^#{1,6}\s+/, '')));
-		if (lines.every((l) => /^\s*([-*•]|\d+[.)])\s+/.test(l))) {
-			const ordered = /^\s*\d/.test(lines[0]);
-			return h(
-				ordered ? 'ol' : 'ul',
-				{},
-				lines.map((l) => h('li', {}, inline(l.replace(/^\s*([-*•]|\d+[.)])\s+/, ''))))
-			);
+		// Runs of list items become lists; the lines around them stay paragraphs.
+		const runs = [];
+		for (const l of lines) {
+			const item = ITEM.test(l);
+			const last = runs.at(-1);
+			if (last && last.item === item) last.lines.push(l);
+			else runs.push({ item, lines: [l] });
 		}
-		return h(
-			'p',
-			{},
-			lines.flatMap((l, i) => (i ? [h('br'), ...inline(l)] : inline(l)))
+		return runs.map((run) =>
+			run.item
+				? h(
+						/^\s*\d/.test(run.lines[0]) ? 'ol' : 'ul',
+						{},
+						run.lines.map((l) => h('li', {}, inline(l.replace(ITEM, ''))))
+					)
+				: h(
+						'p',
+						{},
+						run.lines.flatMap((l, k) => (k ? [h('br'), ...inline(l)] : inline(l)))
+					)
 		);
 	});
 }

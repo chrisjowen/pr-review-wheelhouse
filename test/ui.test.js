@@ -289,3 +289,23 @@ describe('placing notes on a long hunk', () => {
 		);
 	});
 });
+
+describe('the model’s text', () => {
+	it('turns paragraphs, headings and lists into elements, and HTML into text', async () => {
+		const { rich } = await import('../wheelhouse/ui/dom.js');
+		const box = document.createElement('div');
+		box.append(
+			...rich(
+				'## Intent\n\nSmallest fix, pick one:\n- **Cypher** side\n- TS side\n\nI’d pick `Cypher`. <img src=x onerror=alert(1)>'
+			)
+		);
+		assert.deepEqual(
+			[...box.children].map((c) => c.tagName),
+			['H4', 'P', 'UL', 'P']
+		);
+		assert.equal(box.querySelectorAll('li').length, 2);
+		assert.equal(box.querySelector('li strong').textContent, 'Cypher');
+		assert.equal(box.querySelector('img'), null);
+		assert.match(box.textContent, /<img src=x onerror=alert\(1\)>/);
+	});
+});

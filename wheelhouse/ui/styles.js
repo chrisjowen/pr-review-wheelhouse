@@ -187,7 +187,8 @@ figure { margin: 0; }
 .code tr.hh td { color: var(--rv-muted); background: color-mix(in srgb, var(--rv-rule) 35%, transparent); font-size: 11.5px; }
 .code tr.sel { outline: 1px solid var(--rv-sea); outline-offset: -1px; background: var(--rv-sea-soft); }
 .code tr.req td:first-child { box-shadow: inset 3px 0 0 var(--rv-warn); }
-.code tr.inline-req td { white-space: normal; font-family: var(--rv-sans); font-size: 13px; padding: 8px 14px 8px 52px; background: var(--rv-warn-soft); }
+.code tr.inline-req td { white-space: normal; font-family: var(--rv-sans); font-size: 13px; padding: 0; background: var(--rv-warn-soft); }
+.req-box { position: sticky; left: 0; width: min(640px, 100%); padding: 8px 14px 8px 52px; white-space: normal; }
 .tk-k { color: color-mix(in srgb, #7a3e8c 80%, var(--rv-ink)); } .tk-s { color: var(--rv-ok); } .tk-c { color: var(--rv-muted); font-style: italic; } .tk-n { color: var(--rv-brass); } .tk-t { color: var(--rv-sea); }
 .more-lines { padding: 6px 14px; font-size: 12px; color: var(--rv-muted); }
 
@@ -310,8 +311,8 @@ textarea { flex: 1; border: 0; outline: 0; resize: none; font: 13.5px/1.5 var(--
 .error { color: var(--rv-bad); font-size: 13px; margin: 6px 0; }
 
 /* ---------- overlays ---------- */
-.scrim { position: fixed; inset: 0; background: rgba(20,30,40,.35); z-index: 50; display: grid; place-items: center; padding: 24px; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(540px, 100vw); background: var(--rv-paper); z-index: 51; padding: 20px 24px; overflow-y: auto; box-shadow: -8px 0 30px rgba(0,0,0,.15); }
+.scrim { position: fixed; inset: 0; background: rgba(10,16,24,.55); z-index: 50; display: grid; place-items: center; padding: 24px; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(540px, 100vw); background: var(--rv-card); border-left: 1px solid var(--rv-rule); z-index: 51; padding: 20px 24px; overflow-y: auto; box-shadow: -8px 0 30px rgba(0,0,0,.15); }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; }
 .drawer-head h2, .modal h2 { font-family: var(--rv-serif); font-weight: 400; font-size: 26px; margin: 0; }
 .drawer-note { font-size: 13px; color: var(--rv-muted); }
@@ -322,7 +323,7 @@ textarea { flex: 1; border: 0; outline: 0; resize: none; font: 13.5px/1.5 var(--
 .field textarea:focus { border-color: var(--rv-sea); }
 .saved { font-size: 12px; color: var(--rv-ok); font-weight: 400; }
 .drawer-foot { display: flex; justify-content: space-between; margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--rv-hair); }
-.modal { background: var(--rv-paper); border-radius: 14px; width: min(760px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; padding: 24px 28px; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+.modal { background: var(--rv-card); border: 1px solid var(--rv-rule); border-radius: 14px; width: min(760px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; padding: 24px 28px; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
 .modal .outcome { font-size: 15px; color: var(--rv-ink-2); margin: 6px 0 16px; }
 .verdicts { display: flex; gap: 8px; margin: 8px 0 16px; flex-wrap: wrap; align-items: center; }
 .draft-body { width: 100%; min-height: 110px; border: 1px solid var(--rv-rule); border-radius: 8px; background: var(--rv-card); padding: 10px 12px; font: 13px/1.5 var(--rv-sans); color: var(--rv-ink); resize: vertical; }

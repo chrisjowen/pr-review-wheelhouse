@@ -398,7 +398,7 @@ export function readWalkthrough(raw) {
 		risks: strs(r.risks, 5, 300),
 		stops: Array.isArray(r.stops) ? r.stops : [],
 		take: strs(r.take, 4, 900),
-		questions: strs(r.questions, 3, 160)
+		questions: strs(r.questions, 3, 300)
 	};
 }
 
@@ -420,7 +420,7 @@ export function readQuality(raw, files, resolvePath) {
 		});
 	}
 	findings.sort((a, b) => (a.level === b.level ? 0 : a.level === 'worth' ? -1 : 1));
-	return { take: strs(r.take, 3, 900), findings, questions: strs(r.questions, 3, 160) };
+	return { take: strs(r.take, 3, 900), findings, questions: strs(r.questions, 3, 300) };
 }
 
 export function readChange(raw, files, resolvePath) {
@@ -454,7 +454,7 @@ export function readChange(raw, files, resolvePath) {
 			}))
 			.filter((a) => a.title),
 		pick: str(r.pick, 600),
-		questions: strs(r.questions, 3, 160)
+		questions: strs(r.questions, 3, 300)
 	};
 }
 
@@ -475,5 +475,5 @@ export function readSkim(raw, files, resolvePath) {
 	const rows = files.map(
 		(f) => seen.get(f.path) ?? { file: f.path, risk: 'low', note: '', unsaid: true }
 	);
-	return { take: strs(r.take, 2, 900), files: rows, questions: strs(r.questions, 3, 160) };
+	return { take: strs(r.take, 2, 900), files: rows, questions: strs(r.questions, 3, 300) };
 }

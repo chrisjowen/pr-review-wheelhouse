@@ -198,7 +198,10 @@ export function createClaude({
 			}
 			return {
 				text: typeof result.result === 'string' ? result.result : text,
-				promptTokens: result.usage?.input_tokens ?? 0,
+				promptTokens:
+					(result.usage?.input_tokens ?? 0) +
+					(result.usage?.cache_read_input_tokens ?? 0) +
+					(result.usage?.cache_creation_input_tokens ?? 0),
 				outputTokens: result.usage?.output_tokens ?? count,
 				ms: Date.now() - started
 			};

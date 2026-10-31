@@ -1446,7 +1446,11 @@ export class PrReviewTab extends HTMLElement {
 						h(
 							'tr',
 							{ class: 'inline-req' },
-							h('td', { colspan: '3' }, h('strong', {}, 'Change requested: '), q.text)
+							h(
+								'td',
+								{ colspan: '3' },
+								h('div', { class: 'req-box' }, h('strong', {}, 'Change requested: '), q.text)
+							)
 						)
 					);
 		}
@@ -1610,9 +1614,9 @@ export class PrReviewTab extends HTMLElement {
 		const print = [stage.id, stage.title, res?.take, res?.questions, run?.state, run?.reason, list];
 		if (!this.changed('chat', print)) return;
 		const log = this.el.log;
-		const stick =
-			this.prints.chatStage !== stage.id ||
-			log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+		// A stage's chat opens at the top of its take; after that it follows new messages.
+		const fresh = this.prints.chatStage !== stage.id;
+		const stick = !fresh && log.scrollHeight - log.scrollTop - log.clientHeight < 60;
 		this.prints.chatStage = stage.id;
 		const label = stage.kind === 'change' ? stage.title : KIND_LABEL[stage.kind];
 		const items = [h('div', { class: 'divider' }, label)];
@@ -1692,7 +1696,8 @@ export class PrReviewTab extends HTMLElement {
 			else items.push(h('div', { class: `msg msg-agent${m.error ? ' error' : ''}` }, rich(m.text)));
 		}
 		log.replaceChildren(...items);
-		if (stick) log.scrollTop = log.scrollHeight;
+		if (fresh) log.scrollTop = 0;
+		else if (stick) log.scrollTop = log.scrollHeight;
 	}
 
 	renderComposer(r, stage) {
