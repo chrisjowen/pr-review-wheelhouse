@@ -41,6 +41,11 @@ describe('the manifest', () => {
 		}
 	});
 
+	it('takes the pull requests Wheelhouse opens, through the ?pr= the tab reads', () => {
+		const tab = plugin.contributions.find((c) => c.id === 'review');
+		assert.equal(tab.opensPullRequest, '?pr={url}');
+	});
+
 	it('stays within the provider limits Wheelhouse allows', () => {
 		for (const p of plugin.providers) {
 			assert.equal(p.scope, 'project');
