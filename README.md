@@ -7,6 +7,8 @@ A [Wheelhouse](https://github.com/chrisjowen/wheelhouse) plugin that adds a **PR
 3. **Stops**: the important changes, one to three files at a time, with the reviewer's notes pinned above the lines they discuss, a complexity rating, alternative approaches and its pick.
 4. **Skim pile**: everything else, one line and a risk level each. Generated files (build output, lockfiles, snapshots) stay hidden.
 
+![The walkthrough of a real pull request (chrisjowen/docket#48) in the PR review tab: the stages down the left, the reviewer's summary in the middle and the review mate's chat on the right](docs/images/walkthrough.png)
+
 A chat sits beside the code at every stage. It opens each stage with the reviewer's take and a few questions you might ask. You can click line numbers to attach lines to a question, or switch it to **Request change** to pin a change request under a line. **Finish review** suggests a verdict from your notes and drafts the review. From there you can post it to GitHub, or send the change requests to Firstmate. Nothing is posted or sent until you click.
 
 The reviewer is Claude by default, run through Claude Code's headless mode. A local model through [Ollama](https://ollama.com) is the other choice (see [Settings](#settings)).
@@ -34,6 +36,22 @@ Opening a PR reads it with `gh` (description, commits, checks and diff), sorts t
 
 Move between stages with the passage on the left, **Mark reviewed, next stop**, or the `[` and `]` keys. Each stage has **Read again**, which runs it again with the prompts as they are now.
 
+The quality pass lists readability notes on the changed source, each with its lines and a suggested fix. **Keep** sends a note to the author as a suggestion; **Dismiss** drops it.
+
+![The quality pass: a note marked "Worth changing" on a long function, with its diff lines, the suggestion, and Keep, Dismiss and Discuss buttons](docs/images/quality-pass.png)
+
+At each stop the reviewer's notes sit above the lines they discuss. **Request a change here** pins a change request under those lines, and the chat answers questions about the stop.
+
+![Stop 1 of the review: a reviewer note pinned above lines 61 to 64, a change request pinned under them, and the chat answering a question about the stop's ranking query](docs/images/stop.png)
+
+Each stop ends with other ways the change could have been written, each with its gains and costs, and the one the reviewer would pick.
+
+![Other ways to do it: three alternative approaches with their gains and costs, labelled Worse, Consider and Recommend](docs/images/alternatives.png)
+
+The skim pile gives every remaining file one line and a risk level. Expand a row to see its diff.
+
+![The skim pile: the remaining files, each with a one-line summary, its size and a risk dot, and generated files hidden](docs/images/skim-pile.png)
+
 ### Finishing
 
 **Finish review** shows what you asked for and suggests a verdict: _Request changes_ once you have asked for any change, _Comment_ when you have kept only suggestions, _Approve_ otherwise. The draft is editable.
@@ -42,9 +60,13 @@ Move between stages with the passage on the left, **Mark reviewed, next stop**, 
 - **Send to Firstmate** shows the message: the PR's URL, then each change with its file and lines. **Open in Firstmate's chat** puts it in Wheelhouse's chat box, the same handoff the GitHub issues plugin uses. Nothing is sent until you send it there.
 - **Copy review** copies the summary and comments.
 
+![Finish the review: the suggested verdict Request changes, the editable summary, the two inline comments, and the message for Firstmate](docs/images/finish-review.png)
+
 ### Prompts
 
 **Prompts** opens the overall review prompt and the four stage prompts (walkthrough, quality pass, stops, skim pile). They are saved for every review as you type. Each pass gets the overall prompt first, then its stage's prompt, then only that stage's context, then a fixed description of the JSON to answer with. That last part isn't editable, so a reworded prompt can't break how the answer is read.
+
+![The review prompts panel: the overall review prompt and the walkthrough, quality pass, key change stops and skim pile prompts, each editable](docs/images/prompts.png)
 
 ## Settings
 
