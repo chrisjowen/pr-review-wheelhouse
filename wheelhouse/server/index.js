@@ -136,6 +136,8 @@ export function createPlugin() {
 				id: 'review',
 				title: 'PR review',
 				provider: 'prs',
+				// Wheelhouse opens a chat card's pull request here; older versions ignore it.
+				opensPullRequest: '?pr={url}',
 				render: { element: 'pr-review-tab' }
 			}
 		],
