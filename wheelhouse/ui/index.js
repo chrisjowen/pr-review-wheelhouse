@@ -201,7 +201,7 @@ export class PrReviewTab extends HTMLElement {
 			const known = (this._data?.prs ?? []).find((p) => String(p.number) === pr);
 			pr = known?.url ?? null;
 		}
-		if (pr) return { url: pr, stage: null };
+		if (pr) return { url: pr, stage: null, linked: true };
 		const last = store.get(`pr-review.last.${this.project}`);
 		return last?.url ? last : null;
 	}
@@ -265,18 +265,28 @@ export class PrReviewTab extends HTMLElement {
 
 	/**
 	 * Shows a review the engine already keeps, as kept, without reading the PR
-	 * or running a pass; any other PR waits in the URL box for the captain's click.
+	 * or running a pass; any other PR waits in the URL box for the captain's click,
+	 * unless it came from a ?pr= link and the host turns on `autoOpen`.
 	 */
-	async reopen({ url, stage }) {
+	async reopen({ url, stage, linked }) {
 		const kept = this.s.recent.find((x) => x.url === url);
 		try {
 			if (!kept) throw new Error('not kept');
 			this.show(await this.api('GET', `/api/reviews/${kept.id}`), stage);
 		} catch {
+			// A host that is itself a click on Review (the web app's review page) opens its ?pr= link straight away.
+			if (linked && this.feature('autoOpen')) return void this.open(url, stage);
 			this.s.typed = url;
 		}
 		this.render();
 		this.poll();
+	}
+
+	/** What the host lets the tab do; Wheelhouse sets none of these, so the tab there is as it always was. */
+	feature(name) {
+		const f = this.host?.features ?? {};
+		const defaults = { post: true, firstmate: true, markdown: false, autoOpen: false };
+		return name in f ? !!f[name] : defaults[name];
 	}
 
 	show(r, stage) {
@@ -1044,6 +1054,7 @@ export class PrReviewTab extends HTMLElement {
 	modelName() {
 		const s = this._data?.settings;
 		if (!s) return 'The reviewer';
+		if (s.label) return s.label;
 		return s.backend === 'ollama' ? s.ollamaModel : `Claude (${s.claudeModel})`;
 	}
 
@@ -1636,9 +1647,11 @@ export class PrReviewTab extends HTMLElement {
 						'p',
 						{ class: 'chat-status' },
 						h('span', { class: `dot${engineOk ? '' : ' off'}` }),
-						this._data?.settings?.backend === 'ollama'
-							? `${this.modelName()} on this computer`
-							: `${this.modelName()} through Claude Code`
+						this._data?.settings?.where
+							? `${this.modelName()} ${this._data.settings.where}`
+							: this._data?.settings?.backend === 'ollama'
+								? `${this.modelName()} on this computer`
+								: `${this.modelName()} through Claude Code`
 					)
 				)
 			);
@@ -2133,7 +2146,9 @@ export class PrReviewTab extends HTMLElement {
 					h(
 						'span',
 						{ class: 'dim' },
-						`Reviewer: ${this.modelName()} (Settings → Plugins → PR review)`
+						this._data?.settings?.where
+							? `Reviewer: ${this.modelName()}`
+							: `Reviewer: ${this.modelName()} (Settings → Plugins → PR review)`
 					),
 					this.s.review
 						? h(
@@ -2323,29 +2338,37 @@ export class PrReviewTab extends HTMLElement {
 					h('button', { class: 'ghost-btn', type: 'button', onclick: close }, 'Back to the review'),
 					h(
 						'button',
-						{ class: 'ghost-btn', type: 'button', onclick: () => void this.copy(body, draft) },
-						'Copy review'
-					),
-					h(
-						'button',
 						{
-							class: 'ghost-btn',
+							class: this.feature('post') ? 'ghost-btn' : 'primary-btn navy',
 							type: 'button',
-							disabled: !points.length,
-							title: points.length ? null : 'Nothing to fix',
-							onclick: () => ((this.s.finish.step = 'firstmate'), this.renderOverlays())
+							onclick: () => void this.copy(body, draft)
 						},
-						'Send to Firstmate'
+						this.feature('markdown') ? 'Copy as Markdown' : 'Copy review'
 					),
-					h(
-						'button',
-						{
-							class: 'primary-btn navy',
-							type: 'button',
-							onclick: () => ((this.s.finish.step = 'confirm'), this.renderOverlays())
-						},
-						'Post to GitHub'
-					)
+					this.feature('firstmate')
+						? h(
+								'button',
+								{
+									class: 'ghost-btn',
+									type: 'button',
+									disabled: !points.length,
+									title: points.length ? null : 'Nothing to fix',
+									onclick: () => ((this.s.finish.step = 'firstmate'), this.renderOverlays())
+								},
+								'Send to Firstmate'
+							)
+						: null,
+					this.feature('post')
+						? h(
+								'button',
+								{
+									class: 'primary-btn navy',
+									type: 'button',
+									onclick: () => ((this.s.finish.step = 'confirm'), this.renderOverlays())
+								},
+								'Post to GitHub'
+							)
+						: null
 				),
 				tail
 			)
@@ -2374,15 +2397,17 @@ export class PrReviewTab extends HTMLElement {
 	}
 
 	async copy(body, draft) {
-		const text = [
-			body,
-			'',
-			...draft.comments.map(
-				(c) => `- ${c.path}:${c.start_line ? `${c.start_line}-` : ''}${c.line} ${c.body}`
-			)
-		]
-			.join('\n')
-			.trim();
+		const text = this.feature('markdown')
+			? reviewMarkdown(this.s.review, this.s.finish, body, draft)
+			: [
+					body,
+					'',
+					...draft.comments.map(
+						(c) => `- ${c.path}:${c.start_line ? `${c.start_line}-` : ''}${c.line} ${c.body}`
+					)
+				]
+					.join('\n')
+					.trim();
 		try {
 			await navigator.clipboard.writeText(text);
 			this.toast('Review copied.');
@@ -2390,6 +2415,26 @@ export class PrReviewTab extends HTMLElement {
 			this.toast('The clipboard isn’t available here.');
 		}
 	}
+}
+
+/** The finished review as Markdown, to paste into GitHub or anywhere else. */
+export function reviewMarkdown(r, finish, body, draft) {
+	const pr = r.pr;
+	const out = [
+		`## Review of [${pr.owner}/${pr.repo}#${pr.number}](${pr.url}): ${pr.title}`,
+		'',
+		`**Verdict:** ${VERDICT_LABEL[finish?.event] ?? finish?.event ?? 'Comment'} · reviewed at \`${String(pr.headSha).slice(0, 7)}\``,
+		'',
+		String(body ?? '').trim()
+	];
+	if (draft.comments.length) {
+		out.push('', '### Line comments', '');
+		for (const c of draft.comments)
+			out.push(
+				`- \`${c.path}:${c.start_line ? `${c.start_line}-` : ''}${c.line}\`: ${String(c.body).replace(/\n+/g, ' ')}`
+			);
+	}
+	return out.join('\n').trim();
 }
 
 /** The diff lines a new-side range covers, with the removed lines just before them. */

@@ -72,7 +72,7 @@ const DATA = {
 	settings: { backend: 'ollama', ollamaModel: 'fake:7b', claudeModel: 'sonnet' }
 };
 
-function mount(host) {
+function mount(host, data = DATA) {
 	const el = document.createElement('pr-review-tab');
 	el.host = host;
 	el.entry = {
@@ -85,7 +85,7 @@ function mount(host) {
 	};
 	document.body.append(el);
 	globalThis.__el = el;
-	el.data = DATA;
+	el.data = data;
 	return el;
 }
 const $ = (el, sel) => el.shadowRoot.querySelector(sel);
@@ -302,6 +302,126 @@ describe('coming back to the tab', () => {
 		assert.equal(model.calls.length, passes, 'no model pass');
 		el.remove();
 		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
+	});
+});
+
+describe('a host that is not Wheelhouse', () => {
+	it('names the reviewer as the host says', async () => {
+		const el = mount(running(), {
+			...DATA,
+			settings: { ...DATA.settings, label: 'Some Model', where: 'through OpenRouter' }
+		});
+		await until(() => $(el, '.rail'));
+		assert.match($(el, '.chat-status').textContent, /^Some Model through OpenRouter$/);
+		button(el, 'Prompts').click();
+		await until(() => $(el, '.drawer-foot'));
+		assert.match($(el, '.drawer-foot').textContent, /^Reviewer: Some Model(?! \()/);
+		el.remove();
+	});
+
+	it('offers only the finishes the host allows, and copies the review as Markdown', async () => {
+		const copied = [];
+		const clipboard = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard');
+		Object.defineProperty(window.navigator, 'clipboard', {
+			value: { writeText: async (t) => void copied.push(t) },
+			configurable: true
+		});
+		const el = mount({ ...running(), features: { post: false, firstmate: false, markdown: true } });
+		await until(() => $(el, '.rail'));
+		button(el, 'Finish review').click();
+		await until(() => $(el, '.modal'));
+		assert.deepEqual(
+			$$(el, '.modal-foot button').map((b) => b.textContent.trim()),
+			['Back to the review', 'Copy as Markdown']
+		);
+		assert.ok(button(el, 'Copy as Markdown').className.includes('primary-btn'));
+		button(el, 'Copy as Markdown').click();
+		await until(() => copied.length);
+		assert.match(
+			copied[0],
+			/^## Review of \[acme\/lumen#48\]\(https:\/\/github\.com\/acme\/lumen\/pull\/48\)/
+		);
+		assert.match(copied[0], /\*\*Verdict:\*\* Request changes/);
+		assert.match(copied[0], /### Line comments\n\n- `src\/legacy\.ts:125`: /);
+		el.remove();
+		if (clipboard) Object.defineProperty(window.navigator, 'clipboard', clipboard);
+		else delete window.navigator.clipboard;
+	});
+
+	it('keeps every Wheelhouse finish when the host sets no features', async () => {
+		const el = mount(running());
+		await until(() => $(el, '.rail'));
+		button(el, 'Finish review').click();
+		await until(() => $(el, '.modal'));
+		assert.deepEqual(
+			$$(el, '.modal-foot button').map((b) => b.textContent.trim()),
+			['Back to the review', 'Copy review', 'Send to Firstmate', 'Post to GitHub']
+		);
+		el.remove();
+	});
+
+	it('opens a ?pr= link straight away when the host is itself the click on Review', async () => {
+		const other = 'https://github.com/acme/lumen/pull/49';
+		window.happyDOM.setURL(`http://127.0.0.1:4310/projects/lumen/pr-review/review?pr=${other}`);
+		const reads = gh.calls.length;
+		const el = mount({ ...running(), features: { autoOpen: true } });
+		await until(() => gh.calls.length > reads);
+		assert.ok(
+			gh.calls.slice(reads).some((c) => c.argv[1] === 'view' && c.argv[2] === '49'),
+			'read PR 49 without a click'
+		);
+		await reviews.settled();
+		el.remove();
+		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
+	});
+
+	it('leaves the last review it no longer keeps in the box even when the host opens links', async () => {
+		const gone = 'https://github.com/acme/lumen/pull/50';
+		localStorage.setItem('pr-review.last.lumen', JSON.stringify({ url: gone, stage: null }));
+		const reads = gh.calls.length;
+		const el = mount({ ...running(), features: { autoOpen: true } });
+		await until(() => $(el, '[data-key="pr-url"]')?.value === gone);
+		assert.equal(gh.calls.length, reads, 'read no PR without a click');
+		el.remove();
+		localStorage.clear();
+	});
+});
+
+describe('the review as Markdown', () => {
+	it('heads it with the PR, the verdict and the commit, and lists the line comments', async () => {
+		const { reviewMarkdown } = await import('../wheelhouse/ui/index.js');
+		const r = {
+			pr: {
+				owner: 'acme',
+				repo: 'lumen',
+				number: 48,
+				url: PR_URL,
+				title: 'Draw boards',
+				headSha: 'abcdef1234567'
+			}
+		};
+		const draft = {
+			comments: [
+				{ path: 'src/a.ts', line: 12, body: 'Name this.' },
+				{ path: 'src/b.ts', start_line: 3, line: 5, body: 'Two\n\nlines.' }
+			]
+		};
+		assert.equal(
+			reviewMarkdown(r, { event: 'COMMENT' }, '  Looks good.\n', draft),
+			[
+				`## Review of [acme/lumen#48](${PR_URL}): Draw boards`,
+				'',
+				'**Verdict:** Comment · reviewed at `abcdef1`',
+				'',
+				'Looks good.',
+				'',
+				'### Line comments',
+				'',
+				'- `src/a.ts:12`: Name this.',
+				'- `src/b.ts:3-5`: Two lines.'
+			].join('\n')
+		);
+		assert.doesNotMatch(reviewMarkdown(r, {}, 'Fine.', { comments: [] }), /Line comments/);
 	});
 });
 

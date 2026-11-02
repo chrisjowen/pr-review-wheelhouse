@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
-import { CLAUDE_SETTINGS, createClaude, flatten } from '../wheelhouse/engine/model.js';
+import {
+	CLAUDE_SETTINGS,
+	createClaude,
+	createOpenAI,
+	flatten,
+	ModelError
+} from '../wheelhouse/engine/model.js';
 
 /** A fake `claude`: records how it was started and answers with `lines` (stream-json). */
 function fakeSpawn({ lines = [], code = 0, stderr = '', fail = null } = {}) {
@@ -149,5 +155,159 @@ describe('Claude through Claude Code', () => {
 		const check = await missing.check();
 		assert.equal(check.ok, false);
 		assert.match(check.reason, /isn’t installed or isn’t on the PATH/);
+	});
+});
+
+/** A fake fetch that answers with a server-sent event stream, cut into the given chunks. */
+function fakeFetch(chunks, { status = 200, said = '' } = {}) {
+	const calls = [];
+	const get = async (url, init) => {
+		calls.push({ url, init, body: JSON.parse(init.body) });
+		if (status !== 200) return new Response(said, { status });
+		const enc = new TextEncoder();
+		return new Response(
+			new ReadableStream({
+				start(c) {
+					for (const x of chunks) c.enqueue(enc.encode(x));
+					c.close();
+				}
+			})
+		);
+	};
+	return { get, calls };
+}
+const sse = (o) => `data: ${JSON.stringify(o)}\n\n`;
+const piece = (content) => sse({ choices: [{ delta: { content } }] });
+
+describe('an OpenAI-compatible provider', () => {
+	const messages = [
+		{ role: 'system', content: 'Be brief.' },
+		{ role: 'user', content: 'Review this.' }
+	];
+
+	it('posts a streamed chat completion with the key, the cap and asks for usage', async () => {
+		const f = fakeFetch([piece('ok')]);
+		const model = createOpenAI({
+			baseUrl: 'https://openrouter.ai/api/v1/',
+			apiKey: 'sk-test',
+			model: 'some/model',
+			maxTokens: 4000,
+			headers: { 'x-title': 'PR review' },
+			fetch: f.get
+		});
+		assert.equal(model.name, 'some/model');
+		await model.generate({ messages });
+		const [call] = f.calls;
+		assert.equal(call.url, 'https://openrouter.ai/api/v1/chat/completions');
+		assert.equal(call.init.method, 'POST');
+		assert.deepEqual(call.init.headers, {
+			'content-type': 'application/json',
+			authorization: 'Bearer sk-test',
+			'x-title': 'PR review'
+		});
+		assert.deepEqual(call.body, {
+			model: 'some/model',
+			messages,
+			temperature: 0.2,
+			max_tokens: 4000,
+			stream: true,
+			stream_options: { include_usage: true }
+		});
+	});
+
+	it('sends no key and no cap when it has none', async () => {
+		const f = fakeFetch([piece('ok')]);
+		await createOpenAI({
+			baseUrl: 'http://127.0.0.1:8080/v1',
+			model: 'local',
+			fetch: f.get
+		}).generate({ messages });
+		assert.equal('authorization' in f.calls[0].init.headers, false);
+		assert.equal('max_tokens' in f.calls[0].body, false);
+	});
+
+	it('streams the answer, even split mid-line, and reports usage and cost', async () => {
+		const stream =
+			': OPENROUTER PROCESSING\n\n' +
+			piece('The board ') +
+			piece('draws ') +
+			piece('subgraphs.') +
+			sse({
+				choices: [],
+				usage: { prompt_tokens: 1200, completion_tokens: 30, cost: 0.0042 }
+			}) +
+			'data: [DONE]\n\n';
+		const f = fakeFetch([stream.slice(0, 50), stream.slice(50, 51), stream.slice(51)]);
+		const seen = [];
+		const out = await createOpenAI({ baseUrl: 'x', model: 'm', fetch: f.get }).generate({
+			messages,
+			onToken: (text, count) => seen.push([text, count])
+		});
+		assert.equal(out.text, 'The board draws subgraphs.');
+		assert.deepEqual(seen, [
+			['The board ', 1],
+			['The board draws ', 2],
+			['The board draws subgraphs.', 3]
+		]);
+		assert.equal(out.promptTokens, 1200);
+		assert.equal(out.outputTokens, 30);
+		assert.equal(out.costUsd, 0.0042);
+		assert.equal(typeof out.ms, 'number');
+	});
+
+	it('counts the pieces and reports no cost when the provider sends no usage', async () => {
+		const f = fakeFetch([piece('a') + piece('b') + 'data: [DONE]']);
+		const out = await createOpenAI({ baseUrl: 'x', model: 'm', fetch: f.get }).generate({
+			messages
+		});
+		assert.equal(out.text, 'ab');
+		assert.equal(out.promptTokens, 0);
+		assert.equal(out.outputTokens, 2);
+		assert.equal(out.costUsd, null);
+	});
+
+	it('says why when the provider refuses, errors mid-stream or isn’t there', async () => {
+		const refused = fakeFetch([], { status: 402, said: 'Insufficient credits' });
+		await assert.rejects(
+			createOpenAI({ baseUrl: 'x', model: 'm', fetch: refused.get }).generate({ messages }),
+			/The AI provider answered 402: Insufficient credits/
+		);
+		const broken = fakeFetch([piece('half') + sse({ error: { message: 'Rate limited' } })]);
+		await assert.rejects(
+			createOpenAI({ baseUrl: 'x', model: 'm', fetch: broken.get }).generate({ messages }),
+			/The AI provider: Rate limited/
+		);
+		const gone = async () => {
+			throw new Error('ECONNREFUSED');
+		};
+		await assert.rejects(
+			createOpenAI({ baseUrl: 'x', model: 'm', fetch: gone }).generate({ messages }),
+			/The AI provider isn’t answering: ECONNREFUSED/
+		);
+	});
+
+	it('stops when the caller stops it', async () => {
+		const stop = new AbortController();
+		const get = (url, init) =>
+			new Promise((_, reject) =>
+				init.signal.addEventListener('abort', () => reject(init.signal.reason))
+			);
+		const pending = createOpenAI({ baseUrl: 'x', model: 'm', fetch: get }).generate({
+			messages,
+			signal: stop.signal
+		});
+		stop.abort();
+		await assert.rejects(pending, (e) => e instanceof ModelError && e.message === 'Stopped.');
+	});
+
+	it('is ready when it has a model, without calling the provider', async () => {
+		const f = fakeFetch([]);
+		assert.deepEqual(await createOpenAI({ baseUrl: 'x', model: 'm', fetch: f.get }).check(), {
+			ok: true
+		});
+		const none = await createOpenAI({ baseUrl: 'x', model: '', fetch: f.get }).check();
+		assert.equal(none.ok, false);
+		assert.match(none.reason, /No model is set/);
+		assert.equal(f.calls.length, 0);
 	});
 });
