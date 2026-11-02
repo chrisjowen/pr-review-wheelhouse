@@ -8,7 +8,14 @@
  * A change request or kept suggestion becomes an inline comment only when its
  * lines sit inside one hunk of the diff, since GitHub refuses a comment
  * anywhere else; the rest go in the review's body with their file and lines.
+ *
+ * The captain's card decisions count too: an accepted concern is a change
+ * request when its verdict blocks (security, acceptance criteria, tests,
+ * performance) and a suggestion otherwise, a comment is a comment, and
+ * accepted praise goes under "What works well".
  */
+
+import { cardPoints } from './cards.js';
 
 export const VERDICTS = /** @type {const} */ (['APPROVE', 'COMMENT', 'REQUEST_CHANGES']);
 export const VERDICT_LABEL = {
@@ -31,7 +38,7 @@ export function keptFindings(review) {
 	return findings.filter((f) => review.decisions?.[f.id] === 'keep');
 }
 
-/** Change requests, then kept suggestions, as one list of review points. */
+/** Change requests, then kept suggestions, then what the card decisions add, as one list of review points. */
 export function reviewPoints(review) {
 	return [
 		...(review?.requests ?? []).map((r) => ({
@@ -47,14 +54,22 @@ export function reviewPoints(review) {
 			from: f.from ?? null,
 			to: f.to ?? f.from ?? null,
 			text: f.suggestion ? `${f.title}. ${f.suggestion}` : f.title
-		}))
+		})),
+		...cardPoints(review).points
 	];
 }
 
-/** Approve with nothing asked, comment with only suggestions, request changes once any change is asked. */
+const LABEL = {
+	change: '**Change requested:**',
+	suggestion: '**Suggestion:**',
+	comment: '**Comment:**'
+};
+
+/** Approve with nothing asked, comment with only suggestions or comments, request changes once any change is asked. */
 export function suggestVerdict(review) {
-	if (review?.requests?.length) return 'REQUEST_CHANGES';
-	if (keptFindings(review).length) return 'COMMENT';
+	const points = reviewPoints(review);
+	if (points.some((p) => p.kind === 'change')) return 'REQUEST_CHANGES';
+	if (points.length) return 'COMMENT';
 	return 'APPROVE';
 }
 
@@ -75,8 +90,9 @@ export function draftReview(review, { event, summary } = {}) {
 	const files = new Map((review?.files ?? []).map((f) => [f.path, f]));
 	const comments = [];
 	const loose = [];
-	for (const p of reviewPoints(review)) {
-		const label = p.kind === 'change' ? '**Change requested:**' : '**Suggestion:**';
+	const points = reviewPoints(review);
+	for (const p of points) {
+		const label = LABEL[p.kind];
 		const file = files.get(p.file);
 		const end = p.to ?? p.from;
 		const h = end ? hunkOf(file, end) : -1;
@@ -89,21 +105,31 @@ export function draftReview(review, { event, summary } = {}) {
 			comments.push(c);
 		} else loose.push({ ...p, label });
 	}
-	const changes = review?.requests?.length ?? 0;
-	const kept = keptFindings(review).length;
+	const n = (kind) => points.filter((p) => p.kind === kind).length;
+	const count = (k, one) => `${k} ${one}${k === 1 ? '' : 's'}`;
+	const changes = n('change');
+	const others = [
+		n('suggestion') ? count(n('suggestion'), 'suggestion') : '',
+		n('comment') ? count(n('comment'), 'comment') : ''
+	].filter(Boolean);
 	const lines = [];
 	const lead =
 		summary?.trim() ||
 		(ev === 'APPROVE'
 			? 'Looks good to me.'
 			: ev === 'REQUEST_CHANGES'
-				? `${changes} change${changes === 1 ? '' : 's'} requested${kept ? `, and ${kept} suggestion${kept === 1 ? '' : 's'}` : ''}; see the comments.`
-				: `${kept} suggestion${kept === 1 ? '' : 's'}, none blocking; see the comments.`);
+				? `${count(changes, 'change')} requested${others.length ? `, and ${others.join(' and ')}` : ''}; see the comments.`
+				: `${others.join(' and ') || 'Nothing'}, none blocking; see the comments.`);
 	lines.push(lead);
 	if (loose.length) {
 		lines.push('');
 		for (const p of loose)
 			lines.push(`- ${p.label} ${where(p) ? `\`${where(p)}\`: ` : ''}${p.text}`);
+	}
+	const { praise } = cardPoints(review);
+	if (praise.length) {
+		lines.push('', '**What works well:**');
+		for (const p of praise) lines.push(`- ${p.file ? `\`${p.file}\`: ` : ''}${p.text}`);
 	}
 	return { event: ev, body: lines.join('\n'), comments };
 }
@@ -123,7 +149,7 @@ export function firstmateMessage(review) {
 	];
 	points.forEach((p, i) =>
 		lines.push(
-			`${i + 1}. ${p.kind === 'change' ? 'Change' : 'Suggestion'}${where(p) ? ` at ${where(p)}` : ''}: ${p.text}`
+			`${i + 1}. ${p.kind === 'change' ? 'Change' : p.kind === 'comment' ? 'Comment' : 'Suggestion'}${where(p) ? ` at ${where(p)}` : ''}: ${p.text}`
 		)
 	);
 	return lines.join('\n');

@@ -175,9 +175,9 @@ export function stageOfMessages(messages) {
 	const last = messages.at(-1)?.content ?? '';
 	if (!last.includes('Answer with this JSON shape')) return 'chat';
 	if (last.includes('"headline"')) return 'walkthrough';
-	if (last.includes('"findings"')) return 'quality';
 	if (last.includes('"complexity"')) return 'change';
-	return 'skim';
+	if (last.includes('"risk"')) return 'skim';
+	return 'quality';
 }
 
 /**
