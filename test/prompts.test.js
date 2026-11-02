@@ -103,7 +103,8 @@ describe('assembling a stage’s prompt', () => {
 		assert.match(user, /### src\/search\.ts/);
 		assert.match(user, /\n {3}11 \+ board 11\n/);
 		assert.doesNotMatch(user, /legacy\.ts|bundle\.js|graphOf/);
-		assert.match(user, /"findings"/);
+		assert.match(user, /"cards"/);
+		assert.match(user, /- security \(Possible security issue\)/, 'the verdict set, fixed');
 	});
 
 	it('gives a stop only its own files, with the walkthrough’s headline for context', () => {

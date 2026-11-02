@@ -175,9 +175,9 @@ export function stageOfMessages(messages) {
 	const last = messages.at(-1)?.content ?? '';
 	if (!last.includes('Answer with this JSON shape')) return 'chat';
 	if (last.includes('"headline"')) return 'walkthrough';
-	if (last.includes('"findings"')) return 'quality';
 	if (last.includes('"complexity"')) return 'change';
-	return 'skim';
+	if (last.includes('"risk"')) return 'skim';
+	return 'quality';
 }
 
 /**
@@ -293,4 +293,92 @@ export const ANSWERS = {
 		questions: []
 	},
 	chat: 'Because every new field is optional.'
+};
+
+/** Answers in the card shape: the walkthrough lists acceptance items, and each pass writes cards. */
+export const CARD_ANSWERS = {
+	...ANSWERS,
+	walkthrough: {
+		...ANSWERS.walkthrough,
+		asks: ['Keep the subgraph each adapter returns', 'Rank by score times path confidence']
+	},
+	change: (messages) => {
+		const user = messages.at(-1).content;
+		const files = user.match(/Its files: (.*)/)[1].split(', ');
+		const first = Number(user.match(/\n\s+(\d+) \+ /)?.[1] ?? 12);
+		return {
+			take: [`About ${files.join(' and ')}.`],
+			complexity: 'moderate',
+			rationale: 'Two jobs.',
+			cards: [
+				{
+					verdict: 'Possible security issue',
+					also: 'untested',
+					title: 'Reads other scopes',
+					why: 'The degree counts every edge.',
+					suggestion: 'Count only edges in scope.',
+					file: files[0],
+					from: first,
+					to: first + 2,
+					more: [{ file: files.at(-1), from: first, to: first }],
+					take: 'This is the one to look at.',
+					questions: ['How would it leak?', 'Is it tested?', 'A third is dropped']
+				},
+				{
+					verdict: 'exemplary',
+					also: 'exemplary',
+					title: 'One read in a transaction',
+					why: 'The extra query is gone.',
+					suggestion: 'Nothing to change.',
+					file: files[0],
+					from: first + 3,
+					to: first + 3
+				},
+				{
+					verdict: 'Doesn’t meet acceptance criteria',
+					ask: 2,
+					title: 'Never multiplies the score',
+					why: 'It ranks by match first.',
+					suggestion: 'Multiply the score in.',
+					file: files[0],
+					from: first + 1,
+					to: first + 1
+				},
+				{ verdict: 'smell', title: 'Ghost', file: 'nowhere.ts', from: 1, to: 2 },
+				{ verdict: 'lgtm', why: 'No title, so dropped.', file: files[0], from: first, to: first }
+			],
+			alternatives: [{ title: 'Do less', pros: 'Simple', cons: 'Weaker', verdict: 'consider' }],
+			pick: 'Keep it.',
+			questions: ['What past 60 nodes?']
+		};
+	},
+	quality: {
+		take: ['Mostly tidy.'],
+		cards: [
+			{
+				verdict: 'Code smell',
+				title: 'The same spread eleven times',
+				why: 'Easy to miss one.',
+				suggestion: 'One optional() helper.',
+				file: 'src/search.ts',
+				from: 12,
+				to: 14
+			},
+			{ verdict: 'Looks good', title: 'Clear names', why: 'Reads well.', file: 'src/types.ts' }
+		],
+		questions: ['Show me the spreads']
+	},
+	skim: {
+		...ANSWERS.skim,
+		cards: [
+			{
+				verdict: 'lgtm',
+				title: 'The old helper goes, with its test',
+				why: 'Nothing else used it.',
+				file: 'src/util/helpers.ts',
+				from: 1,
+				to: 2
+			}
+		]
+	}
 };

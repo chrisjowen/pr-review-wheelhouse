@@ -11,6 +11,13 @@
  * and can be run again; nothing is ever posted or sent from here except by
  * `post`, which only the captain's click reaches.
  *
+ * Each card-writing pass (the stops, the quality pass, the skim pile) writes
+ * one card per change in the same call, so cards cost no extra calls. Every
+ * card has its own chat thread (`chat[cardId]`) and the captain's decision
+ * on it (`cardDecisions[cardId]`: accept, disagree or comment, with what to
+ * remember). Reading a stage again, or a new plan for it, writes new cards
+ * and so drops the old cards' threads and decisions.
+ *
  * @typedef {import('./model.js').Model} Model
  */
 
@@ -30,6 +37,7 @@ import {
 	walkthroughMessages
 } from './prompts.js';
 import { heuristicPlan, reconcilePlan, resolvePath, stagesOf } from './stages.js';
+import { cardsOf, DECISIONS, findCard, REMEMBER_SCOPES } from '../ui/cards.js';
 import { draftReview, VERDICTS } from '../ui/draft.js';
 
 export class ReviewError extends Error {
@@ -54,7 +62,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 	/** @type {Map<string, any>} */
 	const live = new Map();
 	/** Each job holds the review it was queued for, so a replaced review's jobs never touch the new one. */
-	/** @type {{ id: string; r: any; kind: 'stage' | 'chat'; stage: string; at: number }[]} */
+	/** A chat job's `thread` is the stage's own id or one of its cards' ids. */
+	/** @type {{ id: string; r: any; kind: 'stage' | 'chat'; stage: string; thread: string; at: number }[]} */
 	const queue = [];
 	/** Which stage the captain is looking at, per review, so it runs first. */
 	const focus = new Map();
@@ -86,6 +95,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 								error: true,
 								text: m.text || 'The engine stopped before I answered.'
 							});
+				r.cardDecisions ??= {};
 				live.set(id, r);
 			}
 		}
@@ -110,11 +120,11 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 
 	// ---------- the queue ----------
 
-	function enqueue(id, kind, stage) {
+	function enqueue(id, kind, stage, thread = stage) {
 		const r = get(id);
 		const same = (j) => j?.r === r && j.kind === 'stage' && j.stage === stage;
 		if (kind === 'stage' && (queue.some(same) || same(currentJob))) return;
-		queue.push({ id, r, kind, stage, at: now() });
+		queue.push({ id, r, kind, stage, thread, at: now() });
 		if (kind === 'stage') r.runs[stage] = { state: 'queued', tokens: 0, model: null, at: now() };
 		void pump();
 	}
@@ -147,7 +157,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				current = new AbortController();
 				try {
 					if (job.kind === 'stage') await runStage(job.r, job.stage, current.signal);
-					else await runChat(job.r, job.stage, current.signal);
+					else await runChat(job.r, job.stage, job.thread, current.signal);
 				} catch (e) {
 					log(`job ${job.kind} ${job.id} ${job.stage} failed: ${e?.stack || e}`);
 				}
@@ -173,6 +183,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 		r.rev++;
 		const p = prompts();
 		const files = filesOf(r, stage.files);
+		const asks = r.results.walkthrough?.asks ?? [];
 		let messages;
 		if (stage.kind === 'walkthrough')
 			messages = walkthroughMessages({
@@ -181,7 +192,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				files: r.files,
 				images: r.pr.images
 			});
-		else if (stage.kind === 'quality') messages = qualityMessages({ prompts: p, pr: r.pr, files });
+		else if (stage.kind === 'quality')
+			messages = qualityMessages({ prompts: p, pr: r.pr, files, asks });
 		else if (stage.kind === 'change')
 			messages = changeMessages({
 				prompts: p,
@@ -195,7 +207,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				prompts: p,
 				pr: r.pr,
 				files,
-				covered: r.stages.filter((s) => s.kind === 'change').flatMap((s) => s.files)
+				covered: r.stages.filter((s) => s.kind === 'change').flatMap((s) => s.files),
+				asks
 			});
 		let out;
 		try {
@@ -248,7 +261,9 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 		} else {
 			const read =
 				stage.kind === 'quality' ? readQuality : stage.kind === 'change' ? readChange : readSkim;
-			r.results[stageId] = read(raw, files, resolvePath);
+			// New cards replace the old ones, and with them their threads and decisions.
+			if (r.results[stageId]) dropCards(r, stageId);
+			r.results[stageId] = read(raw, files, resolvePath, { stage: stageId, asks });
 			r.runs[stageId] = finished;
 		}
 		save(r);
@@ -265,14 +280,30 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				delete r.results[s.id];
 				delete r.runs[s.id];
 				delete r.chat[s.id];
+				dropCards(r, s.id);
 				r.reviewed = r.reviewed.filter((x) => x !== s.id);
 			}
 		}
 		const ids = new Set(next.map((s) => s.id));
 		for (const id of Object.keys(r.results)) if (!ids.has(id)) delete r.results[id];
+		for (const id of new Set(r.stages.map((s) => s.id))) if (!ids.has(id)) dropCards(r, id);
 		r.requests = r.requests.filter((q) => ids.has(q.stage));
 		r.plan = plan;
 		r.stages = next;
+	}
+
+	/** Forgets a stage's cards' chat threads and the captain's decisions on them. */
+	function dropCards(r, stageId) {
+		const mine = (k) => k.startsWith(`${stageId}:`);
+		for (const k of Object.keys(r.chat)) if (mine(k)) delete r.chat[k];
+		for (const k of Object.keys(r.cardDecisions ?? {})) if (mine(k)) delete r.cardDecisions[k];
+	}
+
+	/** A stage's card by id, or a 404. */
+	function cardIn(r, stage, cardId) {
+		const card = cardsOf(stage, r.results[stage.id]).find((c) => c.id === cardId);
+		if (!card) throw new ReviewError('There is no such card.', 404);
+		return card;
 	}
 
 	function queueRest(r) {
@@ -283,12 +314,16 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 
 	// ---------- chat ----------
 
-	async function runChat(r, stageId, signal) {
+	async function runChat(r, stageId, thread, signal) {
 		if (!isLive(r)) return;
 		const stage = r.stages.find((s) => s.id === stageId);
-		const list = r.chat[stageId] ?? [];
+		const list = r.chat[thread] ?? [];
 		const reply = list.findLast((x) => x.role === 'assistant' && x.pending);
 		if (!stage || !reply) return;
+		const card =
+			thread === stageId
+				? null
+				: (cardsOf(stage, r.results[stageId]).find((c) => c.id === thread) ?? null);
 		const asked = list[list.indexOf(reply) - 1];
 		const history = list
 			.slice(0, list.indexOf(reply) - 1)
@@ -301,7 +336,10 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 						}
 					: { role: x.role === 'user' ? 'user' : 'assistant', text: x.text }
 			);
-		const files = filesOf(r, stage.kind === 'walkthrough' ? [] : stage.files);
+		const files = filesOf(
+			r,
+			stage.kind === 'walkthrough' ? [] : card ? card.blocks.map((b) => b.file) : stage.files
+		);
 		const attach = asked?.attach ?? null;
 		const lines = attach
 			? excerpt(
@@ -324,6 +362,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 					stage,
 					files,
 					result: r.results[stageId] ?? null,
+					card,
+					asks: r.results.walkthrough?.asks ?? [],
 					history,
 					message: asked?.text ?? '',
 					attach,
@@ -419,6 +459,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				chat: {},
 				requests: [],
 				decisions: {},
+				cardDecisions: {},
 				reviewed: [],
 				posted: null,
 				previous: kept ? { headSha: kept.pr.headSha, at: kept.updatedAt } : null
@@ -449,19 +490,54 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 			return r;
 		},
 
-		ask(id, stageId, { text, attach = null }) {
+		/**
+		 * A question in a stage's chat, or in one card's chat when `card` names
+		 * one of the stage's cards; the answer arrives in `chat[stage]` or
+		 * `chat[card]`.
+		 */
+		ask(id, stageId, { text, attach = null, card = null }) {
 			const r = get(id);
 			const stage = stageOf(r, stageId);
 			const said = String(text ?? '')
 				.trim()
 				.slice(0, 4000);
 			if (!said) throw new ReviewError('Say something to ask.');
+			const thread = card ? cardIn(r, stage, String(card)).id : stageId;
 			const at = checkAttach(r, stage, attach);
-			const list = (r.chat[stageId] ??= []);
+			const list = (r.chat[thread] ??= []);
 			list.push({ role: 'user', text: said, attach: at, at: now() });
 			list.push({ role: 'assistant', text: '', pending: true, at: now() });
 			save(r);
-			enqueue(id, 'chat', stageId);
+			enqueue(id, 'chat', stageId, thread);
+			return r;
+		},
+
+		/**
+		 * The captain's decision on a card: `accept`, `disagree` (with an
+		 * optional reason) or `comment` (with its text), and optionally who to
+		 * remember a disagreement or comment for (`pr`, `me` or `repo`), kept
+		 * for a later memory. `null` takes the decision back.
+		 */
+		decideCard(id, cardId, { decision = null, text = '', remember = null } = {}) {
+			const r = get(id);
+			if (!findCard(r, cardId)) throw new ReviewError('There is no such card.', 404);
+			r.cardDecisions ??= {};
+			if (decision === null) {
+				delete r.cardDecisions[cardId];
+				save(r);
+				return r;
+			}
+			if (!DECISIONS.includes(decision)) throw new ReviewError('Pick accept, disagree or comment.');
+			const said = String(text ?? '')
+				.trim()
+				.slice(0, 4000);
+			if (decision === 'comment' && !said) throw new ReviewError('Say what to comment.');
+			if (remember !== null && !REMEMBER_SCOPES.includes(remember))
+				throw new ReviewError('Remember it for this PR, for you or for this repo.');
+			if (remember && decision === 'accept')
+				throw new ReviewError('Only a disagreement or a comment is remembered.');
+			r.cardDecisions[cardId] = { decision, text: said, remember, at: now() };
+			save(r);
 			return r;
 		},
 
@@ -554,7 +630,13 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 			} catch (e) {
 				throw new ReviewError(e.message, 502);
 			}
-			r.posted = { at: now(), url: done.url, event };
+			// A host's GitHub may post it as something else (a comment on the captain's own PR), and say why.
+			r.posted = {
+				at: now(),
+				url: done.url,
+				event: VERDICTS.includes(done.event) ? done.event : event,
+				note: typeof done.note === 'string' && done.note ? done.note : null
+			};
 			save(r);
 			return r;
 		},

@@ -153,6 +153,46 @@ describe('a review over HTTP', () => {
 		assert.equal(res.status, 400);
 	});
 
+	it('answers every review with its deck of cards, and takes a card’s decision and question', async () => {
+		const id = 'acme__lumen__48';
+		const r = await (await call('GET', `/api/reviews/${id}`)).json();
+		assert.deepEqual(
+			r.deck.groups.map((g) => g.id),
+			['walkthrough', 'key', 'quality', 'skim', 'generated']
+		);
+		const card = r.deck.cards.find((c) => c.group === 'key');
+		assert.ok(card, 'a stop’s notes read as cards');
+		let res = await call('POST', `/api/reviews/${id}/card`, {
+			card: card.id,
+			decision: 'disagree',
+			text: 'Fine here',
+			remember: 'pr'
+		});
+		assert.equal(res.status, 200);
+		const decided = await res.json();
+		assert.equal(decided.deck.cards.find((c) => c.id === card.id).decision.decision, 'disagree');
+		assert.deepEqual(
+			decided.deck.remember.map((m) => [m.card, m.scope]),
+			[[card.id, 'pr']]
+		);
+		assert.equal(
+			JSON.parse(readFileSync(path.join(dir, 'reviews', `${id}.json`), 'utf8')).deck,
+			undefined,
+			'the deck is never kept'
+		);
+		res = await call('POST', `/api/reviews/${id}/card`, { card: 'stop-9:c1', decision: 'accept' });
+		assert.equal(res.status, 404);
+		res = await call('POST', `/api/reviews/${id}/ask`, {
+			stage: card.stage,
+			card: card.id,
+			text: 'Why?'
+		});
+		assert.equal(res.status, 200);
+		await reviews.settled();
+		const after = await (await call('GET', `/api/reviews/${id}`)).json();
+		assert.equal(after.chat[card.id].at(-1).text, 'Because every new field is optional.');
+	});
+
 	it('takes the plugin’s settings from the tab', async () => {
 		const res = await call('PUT', '/api/config', { model: 'llama3.1' });
 		assert.equal((await res.json()).model, 'llama3.1');

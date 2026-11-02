@@ -7,11 +7,16 @@
  * that changes something must carry the `x-pr-review` header, which a plain
  * form or image request from some other site cannot send without a CORS
  * preflight this engine refuses.
+ *
+ * Every answer that is a review also carries `deck`, the review laid out as
+ * cards (see `deckOf` in `wheelhouse/ui/cards.js`). It is worked out for each
+ * answer and never kept.
  */
 
 import { DEFAULT_PROMPTS, PROMPT_KEYS, readPrompts } from './prompts.js';
 import { GitHubError } from './github.js';
-import { ReviewError } from './review.js';
+import { ReviewError, SCHEMA } from './review.js';
+import { deckOf } from '../ui/cards.js';
 
 export const SERVICE = 'pr-review-engine';
 const LOOPBACK = /^(127\.0\.0\.1|localhost|\[::1\]|[a-z0-9-]+(\.[a-z0-9-]+)*\.localhost)(:\d+)?$/i;
@@ -110,6 +115,16 @@ export function createHandler({ reviews, store, config, version, model }) {
 		],
 		[
 			'POST',
+			/^\/api\/reviews\/([\w.-]+)\/card$/,
+			async (m, b) =>
+				reviews.decideCard(m[1], String(b?.card ?? ''), {
+					decision: b?.decision ?? null,
+					text: b?.text ?? '',
+					remember: b?.remember ?? null
+				})
+		],
+		[
+			'POST',
 			/^\/api\/reviews\/([\w.-]+)\/mark$/,
 			async (m, b) => reviews.mark(m[1], String(b?.stage ?? ''), !!b?.reviewed)
 		],
@@ -164,7 +179,7 @@ export function createHandler({ reviews, store, config, version, model }) {
 				}
 			}
 			try {
-				return send(200, await fn(match, body));
+				return send(200, withDeck(await fn(match, body)));
 			} catch (e) {
 				const status = e instanceof ReviewError || e instanceof GitHubError ? e.status : 500;
 				return send(status, { error: e?.message || 'Something went wrong.' });
@@ -172,6 +187,11 @@ export function createHandler({ reviews, store, config, version, model }) {
 		}
 		return send(404, { error: 'Not found.' });
 	};
+}
+
+/** A review as answered: as kept, plus its deck of cards. */
+function withDeck(v) {
+	return v?.schema === SCHEMA && Array.isArray(v.stages) ? { ...v, deck: deckOf(v) } : v;
 }
 
 function readBody(req) {

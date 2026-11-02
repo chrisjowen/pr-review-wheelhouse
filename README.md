@@ -127,6 +127,70 @@ const model = createOpenAI({
 
 Each answer is streamed, and asks for usage in its last chunk. Besides the usual text and token counts it reports `costUsd`, the cost the provider says the call had (OpenRouter's `usage.cost`), or `null` when the provider doesn't say.
 
+### Cards: one verdict per change
+
+The engine also writes the review as **cards**, one per change, for a host that shows a review a change at a time (the web app does). The plugin's tab doesn't show them yet: it reads the same passes as quality findings and stop notes, as before.
+
+Cards cost no extra calls. The stops, the quality pass and the skim pile each write their cards in the one call they already make, and the walkthrough lists what the PR was asked to do (its acceptance items, from the description) for the cards to check against. A card's chat reads only that card, its lines and its own files, so it is cheaper than a stage's.
+
+Every card has one main verdict from a fixed set and at most one secondary one:
+
+| Verdict                          | Id          | Family  | Accepted, it becomes                       |
+| -------------------------------- | ----------- | ------- | ------------------------------------------ |
+| Exemplary                        | `exemplary` | praise  | a line under "What works well"             |
+| Looks good                       | `lgtm`      | praise  | a line under "What works well"             |
+| Explanation                      | `explain`   | neutral | nothing; it's noted                        |
+| Code smell                       | `smell`     | concern | a suggestion                               |
+| Over-complex                     | `complex`   | concern | a suggestion                               |
+| Not well tested                  | `untested`  | concern | a change request                           |
+| Performance risk                 | `perf`      | concern | a change request                           |
+| Doesn't meet acceptance criteria | `ac`        | concern | a change request                           |
+| Possible security issue          | `security`  | concern | a change request; it always has a severity |
+
+The set, with each verdict's meaning, is `CARD_VERDICTS` in [`wheelhouse/ui/cards.js`](wheelhouse/ui/cards.js), which a page can import as it is.
+
+A card, as kept in `results[stage].cards`:
+
+```js
+{
+	id: 'stop-1:c2',            // the stage's id, then the card's place in it
+	stage: 'stop-1',
+	verdict: 'security',
+	secondary: 'untested',      // or null
+	severity: 'low',            // with security only; else null
+	title: 'The degree counts relationships in other scopes',
+	why: 'What the change does and why it earns the verdict.',
+	suggestion: 'Count only edges in scope.', // concerns only; else ''
+	ask: 2,                     // the acceptance item it checks, or null
+	asked: 'Rank by score times path confidence', // what was asked, for ac
+	file: 'src/subgraph-search.ts', from: 59, to: 60, // or null: about the change as a whole
+	blocks: [{ file, from, to }], // the lines it shows: its own, then up to two more
+	take: 'The reviewer’s opening line in the card’s chat.',
+	questions: ['Suggested questions for the card’s chat']
+}
+```
+
+Every answer that is a review also carries **`deck`**, the review laid out as cards. It is worked out for each answer and never kept:
+
+| Field      | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verdicts` | `CARD_VERDICTS`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `groups`   | The passage, in reading order: **Walkthrough** (with `asks`, each acceptance item and the cards that check it), **Key changes** (with `stops`, each stop's title, files and cards), **Quality pass** (its own cards, and `checklist`: every concern in the review, with its decision), **Skim pile** (with `files`, one line each) and **Generated** (`hidden: true`, with `files` and one card, made without the model). Each group has its `stages`, `state`, `cards` (ids), `look` (concerns) and `decided`. |
+| `cards`    | Every card in reading order, each with its `group` and the captain's `decision` (or null).                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `counts`   | How many cards have each verdict.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `remember` | The disagreements and comments the captain asked to remember: `{ card, scope, verdict, decision, text, file, repo, at }`. Nothing reads these back yet.                                                                                                                                                                                                                                                                                                                                                         |
+
+A page acts on cards with two calls:
+
+- `POST /api/reviews/<id>/card` with `{ card, decision, text, remember }` records the captain's decision: `accept`, `disagree` (with an optional reason) or `comment` (with its text), or `null` to take it back. `remember` is `pr`, `me` or `repo` (who to remember a disagreement or comment for), or `null`.
+- `POST /api/reviews/<id>/ask` with `{ stage, card, text }` asks in that card's own chat. The answer arrives in `chat[<card id>]`, as a stage's does in `chat[<stage id>]`.
+
+Reading a stage again writes new cards, so it drops that stage's cards' chats and decisions.
+
+The draft review counts the card decisions along with the change requests and kept suggestions: an accepted blocking concern makes it **Request changes**, other accepted concerns and comments make it **Comment**, and each sits inline on its lines when they are inside one hunk. Accepted praise goes under "What works well"; disagreements add nothing.
+
+A review kept from before cards, and an answer in the older shape, still read as cards: each quality finding becomes a code smell, and each stop note an explanation (or a code smell when it raised a concern).
+
 ### What the host lets the tab do
 
 The tab reads `host.features`. Wheelhouse sets none of them, so the plugin keeps its defaults.
@@ -137,6 +201,8 @@ The tab reads `host.features`. Wheelhouse sets none of them, so the plugin keeps
 | `firstmate` | on      | **Send to Firstmate** in Finish review.                                                                             |
 | `markdown`  | off     | The copy button becomes **Copy as Markdown**: the PR, the verdict, the commit reviewed, the summary and line notes. |
 | `autoOpen`  | off     | A `?pr=` link the engine doesn't keep opens straight away instead of waiting for a click on Review.                 |
+
+When a host's `github.post` answers with an `event` other than the one asked for (say, a comment on the captain's own pull request) and a `note` saying why, the review keeps both in `posted`.
 
 The tab's data can also carry `settings.label`, the reviewer's name to show, and `settings.where`, how it runs (shown after the name, such as "through OpenRouter"). The Markdown copy comes from `reviewMarkdown(review, finish, body, draft)`, exported from `wheelhouse/ui/index.js`.
 
@@ -175,6 +241,7 @@ The plugin has no runtime dependencies and no build step. Wheelhouse imports `wh
   - `diff.js`: reading the diff.
 - `wheelhouse/ui/`: the `pr-review-tab` element.
   - `draft.js`: drafting the GitHub review and the Firstmate message, shared with the engine.
+  - `cards.js`: the verdict set and the deck of cards, shared with the engine.
 
 The tests use a fake `gh`, a fake model and a fake `claude`, so they need none of the three installed.
 
