@@ -374,6 +374,17 @@ describe('a host that is not Wheelhouse', () => {
 		el.remove();
 		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
 	});
+
+	it('leaves the last review it no longer keeps in the box even when the host opens links', async () => {
+		const gone = 'https://github.com/acme/lumen/pull/50';
+		localStorage.setItem('pr-review.last.lumen', JSON.stringify({ url: gone, stage: null }));
+		const reads = gh.calls.length;
+		const el = mount({ ...running(), features: { autoOpen: true } });
+		await until(() => $(el, '[data-key="pr-url"]')?.value === gone);
+		assert.equal(gh.calls.length, reads, 'read no PR without a click');
+		el.remove();
+		localStorage.clear();
+	});
 });
 
 describe('the review as Markdown', () => {

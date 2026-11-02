@@ -201,7 +201,7 @@ export class PrReviewTab extends HTMLElement {
 			const known = (this._data?.prs ?? []).find((p) => String(p.number) === pr);
 			pr = known?.url ?? null;
 		}
-		if (pr) return { url: pr, stage: null };
+		if (pr) return { url: pr, stage: null, linked: true };
 		const last = store.get(`pr-review.last.${this.project}`);
 		return last?.url ? last : null;
 	}
@@ -267,14 +267,14 @@ export class PrReviewTab extends HTMLElement {
 	 * Shows a review the engine already keeps, as kept, without reading the PR
 	 * or running a pass; any other PR waits in the URL box for the captain's click.
 	 */
-	async reopen({ url, stage }) {
+	async reopen({ url, stage, linked }) {
 		const kept = this.s.recent.find((x) => x.url === url);
 		try {
 			if (!kept) throw new Error('not kept');
 			this.show(await this.api('GET', `/api/reviews/${kept.id}`), stage);
 		} catch {
-			// A host that is itself a click on Review (the web app's review page) opens it straight away.
-			if (this.feature('autoOpen')) return void this.open(url, stage);
+			// A host that is itself a click on Review (the web app's review page) opens its ?pr= link straight away.
+			if (linked && this.feature('autoOpen')) return void this.open(url, stage);
 			this.s.typed = url;
 		}
 		this.render();
