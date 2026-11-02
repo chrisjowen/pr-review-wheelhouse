@@ -96,6 +96,50 @@ It uses the sign-in Claude Code already has. A Wheelhouse that runs with its own
 
 With `backend` set to `ollama`, each stage is one Ollama `/api/chat` call. A 7B model such as `qwen2.5:7b` is usable but generic: it takes 20 to 45 seconds a stage on an Apple-silicon Mac, and it is weak at grouping files from a raw diff. That is why the walkthrough reads a manifest of the files (names, kinds and sizes) rather than the diff, and why the plugin checks its grouping.
 
+## Using the engine in another host
+
+The engine and the tab are plain modules, so another host can run them itself. The [PR review web app](https://github.com/chrisjowen/pr-review-app) does, pinning this repo by commit. Nothing here changes the plugin: in Wheelhouse the reviewer is still Claude or Ollama, and the tab is as described above.
+
+### An OpenAI-compatible reviewer
+
+`createOpenAI` in `wheelhouse/engine/model.js` reviews through any OpenAI-compatible chat completions endpoint: [OpenRouter](https://openrouter.ai), OpenAI, or a server of your own (vLLM, llama.cpp, Ollama's `/v1`). The plugin's settings don't offer it; a host builds it and hands it to `createReviews` and `createHandler` as `main.js` does with the other two.
+
+```js
+import { createOpenAI } from 'pr-review-wheelhouse/wheelhouse/engine/model.js';
+
+const model = createOpenAI({
+	baseUrl: 'https://openrouter.ai/api/v1',
+	apiKey: process.env.OPENROUTER_API_KEY, // read from the environment, never committed
+	model: 'anthropic/claude-sonnet-4.5',
+	maxTokens: 8000
+});
+```
+
+| Option        | Default    | What it does                                                                                    |
+| ------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `baseUrl`     | (required) | The API's base address; the engine posts to `<baseUrl>/chat/completions`.                       |
+| `apiKey`      | none       | Sent as `Authorization: Bearer <key>`. Leave it out for a local server that needs none.         |
+| `model`       | (required) | The model id the provider knows, such as `anthropic/claude-sonnet-4.5` on OpenRouter.           |
+| `maxTokens`   | `0` (none) | Caps each answer (`max_tokens`), so a host can bound what one call may cost before it makes it. |
+| `temperature` | `0.2`      | Sampling temperature.                                                                           |
+| `headers`     | `{}`       | Extra request headers, such as OpenRouter's `HTTP-Referer` and `X-Title`.                       |
+| `timeoutMs`   | 5 minutes  | How long one answer may take.                                                                   |
+
+Each answer is streamed, and asks for usage in its last chunk. Besides the usual text and token counts it reports `costUsd`, the cost the provider says the call had (OpenRouter's `usage.cost`), or `null` when the provider doesn't say.
+
+### What the host lets the tab do
+
+The tab reads `host.features`. Wheelhouse sets none of them, so the plugin keeps its defaults.
+
+| Feature     | Default | What it does                                                                                                        |
+| ----------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `post`      | on      | **Post to GitHub** in Finish review. Off, the copy button becomes the main one.                                     |
+| `firstmate` | on      | **Send to Firstmate** in Finish review.                                                                             |
+| `markdown`  | off     | The copy button becomes **Copy as Markdown**: the PR, the verdict, the commit reviewed, the summary and line notes. |
+| `autoOpen`  | off     | A `?pr=` link the engine doesn't keep opens straight away instead of waiting for a click on Review.                 |
+
+The tab's data can also carry `settings.label`, the reviewer's name to show, and `settings.where`, how it runs (shown after the name, such as "through OpenRouter"). The Markdown copy comes from `reviewMarkdown(review, finish, body, draft)`, exported from `wheelhouse/ui/index.js`.
+
 ## What it reads and writes
 
 The Wheelhouse side is read-only. Its provider runs one `gh pr list` in the project's clone to list the open pull requests.
@@ -126,7 +170,7 @@ The plugin has no runtime dependencies and no build step. Wheelhouse imports `wh
   - `review.js`: the review sessions and the one-at-a-time queue.
   - `stages.js` and `classify.js`: grouping the files into stages.
   - `prompts.js`: assembling the prompts and reading the answers.
-  - `model.js`: the reviewer, Claude Code or Ollama, behind one interface.
+  - `model.js`: the reviewer, Claude Code, Ollama or an OpenAI-compatible API, behind one interface.
   - `github.js`: `gh`.
   - `diff.js`: reading the diff.
 - `wheelhouse/ui/`: the `pr-review-tab` element.

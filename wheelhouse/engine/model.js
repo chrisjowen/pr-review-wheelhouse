@@ -17,9 +17,16 @@
  *   can show progress, with a context window big enough for one stage's diff
  *   (Ollama's default of 2048 tokens is not).
  *
+ * And one the plugin's settings don't offer, for a host that runs the engine
+ * itself (the PR review web app):
+ *
+ * - `createOpenAI`: any OpenAI-compatible chat completions endpoint, such as
+ *   OpenRouter, with an optional cap on each answer and the provider's
+ *   reported cost.
+ *
  * @typedef {{ role: 'system' | 'user' | 'assistant'; content: string }} Message
  * @typedef {{ messages: Message[]; json?: boolean; onToken?: (text: string, count: number) => void; signal?: AbortSignal }} GenerateRequest
- * @typedef {{ text: string; promptTokens: number; outputTokens: number; ms: number }} Generated
+ * @typedef {{ text: string; promptTokens: number; outputTokens: number; costUsd?: number | null; ms: number }} Generated
  * @typedef {{ name: string; generate(r: GenerateRequest): Promise<Generated>; check(): Promise<{ ok: true } | { ok: false; reason: string }> }} Model
  */
 
@@ -310,6 +317,113 @@ export function createOllama({
 				throw new ModelError(`Ollama stopped answering: ${e.message}`);
 			}
 			return { text, promptTokens, outputTokens, ms: Date.now() - started };
+		}
+	};
+}
+
+/**
+ * Any OpenAI-compatible chat completions endpoint: OpenRouter, OpenAI, or a
+ * self-hosted server (vLLM, llama.cpp, Ollama's `/v1`). Streamed, with usage
+ * asked for in the last chunk so a caller can meter what a stage cost.
+ *
+ * `maxTokens` caps each answer, so a caller can bound what one call may cost
+ * before making it.
+ *
+ * @param {{ baseUrl: string; apiKey?: string; model: string; temperature?: number; maxTokens?: number; headers?: Record<string, string>; timeoutMs?: number; fetch?: typeof fetch }} o
+ * @returns {Model}
+ */
+export function createOpenAI({
+	baseUrl,
+	apiKey = '',
+	model,
+	temperature = 0.2,
+	maxTokens = 0,
+	headers = {},
+	timeoutMs = 5 * 60_000,
+	fetch: get = fetch
+}) {
+	const base = String(baseUrl).replace(/\/+$/, '');
+	const auth = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
+	return {
+		name: model,
+		async check() {
+			if (!model) return { ok: false, reason: 'No model is set for the AI provider.' };
+			return { ok: true };
+		},
+		async generate({ messages, onToken, signal }) {
+			const started = Date.now();
+			const stop = AbortSignal.timeout(timeoutMs);
+			const both = signal ? AbortSignal.any([signal, stop]) : stop;
+			let res;
+			try {
+				res = await get(`${base}/chat/completions`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', ...auth, ...headers },
+					body: JSON.stringify({
+						model,
+						messages,
+						temperature,
+						...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
+						stream: true,
+						stream_options: { include_usage: true }
+					}),
+					signal: both
+				});
+			} catch (e) {
+				if (signal?.aborted) throw new ModelError('Stopped.');
+				throw new ModelError(`The AI provider isn’t answering: ${e.message}`);
+			}
+			if (!res.ok || !res.body) {
+				const said = await res.text().catch(() => '');
+				throw new ModelError(
+					`The AI provider answered ${res.status}${said ? `: ${said.slice(0, 300)}` : ''}`
+				);
+			}
+			let text = '';
+			let count = 0;
+			let usage = null;
+			let rest = '';
+			const decoder = new TextDecoder();
+			const take = (line) => {
+				const l = line.trim();
+				if (!l.startsWith('data:')) return;
+				const data = l.slice(5).trim();
+				if (!data || data === '[DONE]') return;
+				let msg;
+				try {
+					msg = JSON.parse(data);
+				} catch {
+					return;
+				}
+				if (msg.error) throw new ModelError(`The AI provider: ${msg.error.message ?? msg.error}`);
+				const piece = msg.choices?.[0]?.delta?.content ?? '';
+				if (piece) {
+					text += piece;
+					count++;
+					onToken?.(text, count);
+				}
+				if (msg.usage) usage = msg.usage;
+			};
+			try {
+				for await (const chunk of res.body) {
+					rest += decoder.decode(chunk, { stream: true });
+					const lines = rest.split('\n');
+					rest = lines.pop() ?? '';
+					for (const line of lines) take(line);
+				}
+				take(rest);
+			} catch (e) {
+				if (e instanceof ModelError) throw e;
+				if (signal?.aborted) throw new ModelError('Stopped.');
+				throw new ModelError(`The AI provider stopped answering: ${e.message}`);
+			}
+			return {
+				text,
+				promptTokens: usage?.prompt_tokens ?? 0,
+				outputTokens: usage?.completion_tokens ?? count,
+				costUsd: typeof usage?.cost === 'number' ? usage.cost : null,
+				ms: Date.now() - started
+			};
 		}
 	};
 }
