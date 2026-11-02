@@ -265,7 +265,8 @@ export class PrReviewTab extends HTMLElement {
 
 	/**
 	 * Shows a review the engine already keeps, as kept, without reading the PR
-	 * or running a pass; any other PR waits in the URL box for the captain's click.
+	 * or running a pass; any other PR waits in the URL box for the captain's click,
+	 * unless it came from a ?pr= link and the host turns on `autoOpen`.
 	 */
 	async reopen({ url, stage, linked }) {
 		const kept = this.s.recent.find((x) => x.url === url);
