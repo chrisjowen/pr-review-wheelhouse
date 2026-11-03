@@ -2,7 +2,7 @@
 
 A [Wheelhouse](https://github.com/chrisjowen/wheelhouse) plugin that adds a **PR review** tab to each project. Point it at a pull request and a reviewer reads the whole PR, then walks you through it in a chat, one change at a time, instead of handing you the list of changed files.
 
-![The chat review of a real pull request (chrisjowen/docket#48) in the PR review tab: the navigator on the left, one change in the chat with its verdicts, its code and Accept, Disagree and Comment](docs/images/chat-card.png)
+![The chat review of a real pull request (chrisjowen/docket#48) in the PR review tab: the navigator on the left with each change marked by its verdict, and in the chat a Performance risk change filed as Serious, with its code](docs/images/chat-card.png)
 
 It is the same review screen as the [PR review web app](https://github.com/chrisjowen/pr-review-app) at pr.chrisjowen.net: the screens live here, in `wheelhouse/ui/`, and each host plugs in its own sign-in, reviewer and GitHub. In Wheelhouse they are all on your computer:
 

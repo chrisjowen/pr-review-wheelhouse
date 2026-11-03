@@ -1473,8 +1473,35 @@ export const CHAT_STYLE = `${TOKENS}
 	display: none;
 }
 
-/* ---------- narrower screens: the navigator and drawer slide over the chat ---------- */
+/* ---------- narrower: the file drawer, then the navigator, slide over the chat ---------- */
+/* A tab beside the host's own menu is narrower than a page, so the navigator stays down to 860px. */
 @container (max-width: 1100px) {
+	.chatapp.drawer-open .clayout {
+		grid-template-columns: var(--navw) minmax(0, 1fr) 0;
+	}
+	.cdrawer {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		right: 0;
+		width: min(620px, 100cqw);
+		z-index: 45;
+		transform: translateX(102%);
+		transition: transform 0.22s ease;
+		box-shadow: var(--rv-shadow);
+	}
+	.chatapp.drawer-open .cdrawer {
+		transform: none;
+	}
+	.chatapp.drawer-open .cscrim {
+		display: block;
+		position: fixed;
+		inset: 0;
+		background: rgb(15 22 30 / 30%);
+		z-index: 35;
+	}
+}
+@container (max-width: 860px) {
 	.clayout,
 	.chatapp.drawer-open .clayout {
 		grid-template-columns: minmax(0, 1fr);
@@ -1496,30 +1523,12 @@ export const CHAT_STYLE = `${TOKENS}
 	.chatapp.nav-open .cnav {
 		transform: none;
 	}
-	.cdrawer {
-		position: fixed;
-		top: 0;
-		bottom: 0;
-		right: 0;
-		width: min(620px, 100cqw);
-		z-index: 45;
-		transform: translateX(102%);
-		transition: transform 0.22s ease;
-		box-shadow: var(--rv-shadow);
-	}
-	.chatapp.drawer-open .cdrawer {
-		transform: none;
-	}
-	.chatapp.nav-open .cscrim,
-	.chatapp.drawer-open .cscrim {
+	.chatapp.nav-open .cscrim {
 		display: block;
 		position: fixed;
 		inset: 0;
 		background: rgb(15 22 30 / 30%);
 		z-index: 35;
-	}
-	.cnote {
-		display: none;
 	}
 }
 @container (max-width: 640px) {
