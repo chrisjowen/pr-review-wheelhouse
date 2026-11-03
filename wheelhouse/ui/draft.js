@@ -159,3 +159,27 @@ export function firstmateMessage(review) {
 export function firstmateHref(text) {
 	return `/?draft=${encodeURIComponent(text)}`;
 }
+
+/**
+ * The finished review as Markdown, to paste into GitHub or anywhere else: the
+ * PR, the verdict, the commit reviewed, the summary and the line comments.
+ * `finish` is `{ event }`, `draft` is `draftReview`'s answer.
+ */
+export function reviewMarkdown(r, finish, body, draft) {
+	const pr = r.pr;
+	const out = [
+		`## Review of [${pr.owner}/${pr.repo}#${pr.number}](${pr.url}): ${pr.title}`,
+		'',
+		`**Verdict:** ${VERDICT_LABEL[finish?.event] ?? finish?.event ?? 'Comment'} · reviewed at \`${String(pr.headSha).slice(0, 7)}\``,
+		'',
+		String(body ?? '').trim()
+	];
+	if (draft.comments.length) {
+		out.push('', '### Line comments', '');
+		for (const c of draft.comments)
+			out.push(
+				`- \`${c.path}:${c.start_line ? `${c.start_line}-` : ''}${c.line}\`: ${String(c.body).replace(/\n+/g, ' ')}`
+			);
+	}
+	return out.join('\n').trim();
+}

@@ -147,17 +147,28 @@ export function sampleView(over = {}) {
 }
 
 /**
- * A fake `gh`: answers `pr view` and `pr diff` for the made-up PR, records
- * every call, and answers `api` (posting a review) with `onPost`.
+ * A fake `gh`: answers `pr view` and `pr diff` for the made-up PR, who it is
+ * signed in as (`login`), a file at a commit (`files`, by path), the
+ * repository and its README, records every call, and answers posting a
+ * review with `onPost`.
  */
-export function fakeGh({ view = sampleView(), diff = sampleDiff(), onPost } = {}) {
+export function fakeGh({
+	view = sampleView(),
+	diff = sampleDiff(),
+	onPost,
+	login = 'reviewer',
+	files = {},
+	readme = '# Lumen\n\nA board for graph search.'
+} = {}) {
 	const calls = [];
+	const missing = { ok: false, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
 	const run = async (argv, o = {}) => {
 		calls.push({ argv, input: o.input });
 		if (argv[0] === 'pr' && argv[1] === 'view')
 			return { ok: true, stdout: JSON.stringify(view), stderr: '' };
 		if (argv[0] === 'pr' && argv[1] === 'diff') return { ok: true, stdout: diff, stderr: '' };
-		if (argv[0] === 'api')
+		if (argv[0] !== 'api') return { ok: false, stdout: '', stderr: 'unknown command' };
+		if (argv.includes('POST'))
 			return onPost
 				? onPost(JSON.parse(o.input))
 				: {
@@ -165,7 +176,33 @@ export function fakeGh({ view = sampleView(), diff = sampleDiff(), onPost } = {}
 						stdout: JSON.stringify({ id: 9, html_url: `${PR_URL}#pullrequestreview-9` }),
 						stderr: ''
 					};
-		return { ok: false, stdout: '', stderr: 'unknown command' };
+		const path = argv.find((a) => a === 'user' || a.startsWith('repos/')) ?? '';
+		if (path === 'user')
+			return login
+				? { ok: true, stdout: `${login}\n`, stderr: '' }
+				: { ...missing, stderr: 'auth' };
+		const file = path.match(/^repos\/[^/]+\/[^/]+\/contents\/(.+)\?ref=(\w+)$/);
+		if (file) {
+			const text = files[decodeURIComponent(file[1])];
+			return text === undefined ? missing : { ok: true, stdout: text, stderr: '' };
+		}
+		if (/^repos\/[^/]+\/[^/]+\/readme$/.test(path))
+			return readme === null ? missing : { ok: true, stdout: readme, stderr: '' };
+		const repo = path.match(/^repos\/([^/]+)\/([^/]+)$/);
+		if (repo)
+			return {
+				ok: true,
+				stdout: JSON.stringify({
+					html_url: `https://github.com/${repo[1]}/${repo[2]}`,
+					description: 'Graph search on a board',
+					language: 'TypeScript',
+					topics: ['graphs', 'search'],
+					stargazers_count: 42,
+					default_branch: 'main'
+				}),
+				stderr: ''
+			};
+		return missing;
 	};
 	return { run, calls };
 }

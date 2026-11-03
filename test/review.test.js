@@ -3,7 +3,15 @@ import { describe, it } from 'node:test';
 import { createGitHub } from '../wheelhouse/engine/github.js';
 import { createReviews } from '../wheelhouse/engine/review.js';
 import { memoryStore } from '../wheelhouse/engine/store.js';
-import { ANSWERS, fakeGh, fakeModel, PR_URL, sampleView, stageOfMessages } from './helpers.js';
+import {
+	ANSWERS,
+	CARD_ANSWERS,
+	fakeGh,
+	fakeModel,
+	PR_URL,
+	sampleView,
+	stageOfMessages
+} from './helpers.js';
 
 const ID = 'acme__lumen__48';
 
@@ -376,21 +384,45 @@ describe('posting to GitHub', () => {
 		assert.equal(r.posted.url, `${PR_URL}#pullrequestreview-9`);
 	});
 
-	it('explains GitHub refusing a verdict on your own PR', async () => {
+	it('posts a verdict on your own PR as a comment, and says so', async () => {
+		const sent = [];
 		const gh = fakeGh({
-			onPost: () => ({
-				ok: false,
-				stdout:
-					'{"message":"Unprocessable Entity","errors":["Can not request changes on your own pull request"]}',
-				stderr: 'HTTP 422'
-			})
+			onPost: (body) => {
+				sent.push(body.event);
+				return body.event === 'COMMENT'
+					? {
+							ok: true,
+							stdout: JSON.stringify({ id: 10, html_url: `${PR_URL}#pullrequestreview-10` }),
+							stderr: ''
+						}
+					: {
+							ok: false,
+							stdout:
+								'{"message":"Unprocessable Entity","errors":["Can not request changes on your own pull request"]}',
+							stderr: 'HTTP 422'
+						};
+			}
 		});
 		const { reviews } = setup({ gh });
 		await reviews.open(PR_URL);
 		await reviews.settled();
-		await assert.rejects(reviews.post(ID, { event: 'REQUEST_CHANGES', confirm: true }), {
+		const r = await reviews.post(ID, { event: 'REQUEST_CHANGES', confirm: true });
+		assert.deepEqual(sent, ['REQUEST_CHANGES', 'COMMENT']);
+		assert.equal(r.posted.event, 'COMMENT');
+		assert.equal(r.posted.url, `${PR_URL}#pullrequestreview-10`);
+		assert.match(r.posted.note, /your own pull request, so this was posted as a comment\./);
+	});
+
+	it('explains GitHub refusing a review for any other reason', async () => {
+		const gh = fakeGh({
+			onPost: () => ({ ok: false, stdout: '', stderr: 'HTTP 422: Validation Failed' })
+		});
+		const { reviews } = setup({ gh });
+		await reviews.open(PR_URL);
+		await reviews.settled();
+		await assert.rejects(reviews.post(ID, { event: 'COMMENT', confirm: true }), {
 			status: 502,
-			message: /your own pull request\. Post it as a comment instead\./
+			message: /GitHub didn’t take the review: HTTP 422: Validation Failed/
 		});
 		assert.equal(reviews.view(ID).posted, null);
 	});
@@ -465,3 +497,67 @@ function holding(stage) {
 	};
 	return { model, running };
 }
+
+describe('what the chat reads besides the review', () => {
+	it('reads a changed file whole at the reviewed head, and nothing else', async () => {
+		const gh = fakeGh({ files: { 'src/search.ts': 'export const a = 1;\n' } });
+		const { reviews } = setup({ gh });
+		await reviews.open(PR_URL);
+		await reviews.settled();
+		assert.deepEqual(await reviews.file(ID, 'src/search.ts'), {
+			path: 'src/search.ts',
+			sha: 'a'.repeat(40),
+			text: 'export const a = 1;\n'
+		});
+		const read = gh.calls.at(-1).argv;
+		assert.deepEqual(read.slice(0, 3), ['api', '-H', 'Accept: application/vnd.github.raw']);
+		assert.equal(read[3], `repos/acme/lumen/contents/src/search.ts?ref=${'a'.repeat(40)}`);
+		const reads = gh.calls.length;
+		await assert.rejects(reviews.file(ID, '../../etc/passwd'), { status: 404 });
+		await assert.rejects(reviews.file(ID, 'src/other.ts'), { status: 404 });
+		await assert.rejects(reviews.file(ID, 'assets/logo.png'), {
+			status: 415,
+			message: /binary file/
+		});
+		assert.equal(
+			gh.calls.length,
+			reads,
+			'a file the PR doesn’t change, or a binary one, is never read'
+		);
+		await assert.rejects(reviews.file(ID, 'src/legacy.ts'), {
+			status: 404,
+			message: /isn’t there at the PR’s head/
+		});
+	});
+
+	it('reads the project: its description, topics and README', async () => {
+		const { reviews } = setup();
+		await reviews.open(PR_URL);
+		await reviews.settled();
+		const p = await reviews.project(ID);
+		assert.equal(p.repo, 'acme/lumen');
+		assert.equal(p.url, 'https://github.com/acme/lumen');
+		assert.equal(p.description, 'Graph search on a board');
+		assert.deepEqual(p.topics, ['graphs', 'search']);
+		assert.match(p.readme, /^# Lumen/);
+	});
+
+	it('says who gh is signed in as, or null when it can’t', async () => {
+		assert.deepEqual(await setup({ gh: fakeGh({ login: 'samchen' }) }).reviews.identity(), {
+			login: 'samchen'
+		});
+		assert.deepEqual(await setup({ gh: fakeGh({ login: null }) }).reviews.identity(), {
+			login: null
+		});
+	});
+
+	it('counts the decided cards of each kept review', async () => {
+		const { reviews } = setup({ answers: CARD_ANSWERS });
+		await reviews.open(PR_URL);
+		await reviews.settled();
+		assert.equal(reviews.list()[0].decided, 0);
+		const card = reviews.view(ID).results['stop-1'].cards[0];
+		reviews.decideCard(ID, card.id, { decision: 'accept' });
+		assert.equal(reviews.list()[0].decided, 1);
+	});
+});

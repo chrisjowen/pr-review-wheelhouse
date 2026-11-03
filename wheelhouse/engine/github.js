@@ -97,6 +97,8 @@ export function checkState(c) {
 	return 'pending';
 }
 
+const OWN_PR_NOTE =
+	'GitHub doesn’t let you approve or request changes on your own pull request, so this was posted as a comment.';
 const FIELDS =
 	'number,title,body,url,author,state,isDraft,baseRefName,headRefName,headRefOid,commits,statusCheckRollup,additions,deletions,changedFiles,createdAt';
 
@@ -167,35 +169,106 @@ export function createGitHub(run) {
 			};
 		},
 
-		/** Posts a review on the head the review was drafted against. */
+		/**
+		 * Posts a review on the head the review was drafted against. GitHub takes
+		 * no verdict on the captain's own pull request, so there it goes up as a
+		 * comment, and the answer says so.
+		 */
 		async post(pr, { event, body, comments }) {
-			const payload = { commit_id: pr.headSha, event, body, comments };
-			const r = await run(
-				[
-					'api',
-					'-X',
-					'POST',
-					`repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/reviews`,
-					'--input',
-					'-'
-				],
-				{ input: JSON.stringify(payload) }
-			);
-			if (!r.ok) {
-				const said = `${r.stdout}\n${r.stderr}`;
-				if (/own pull request/i.test(said))
-					throw new GitHubError(
-						'GitHub doesn’t let you approve or request changes on your own pull request. Post it as a comment instead.'
-					);
-				throw fail('GitHub didn’t take the review', r);
+			const send = (ev) =>
+				run(
+					[
+						'api',
+						'-X',
+						'POST',
+						`repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/reviews`,
+						'--input',
+						'-'
+					],
+					{ input: JSON.stringify({ commit_id: pr.headSha, event: ev, body, comments }) }
+				);
+			let ev = event;
+			let note = null;
+			let r = await send(ev);
+			if (!r.ok && ev !== 'COMMENT' && /own pull request/i.test(`${r.stdout}\n${r.stderr}`)) {
+				ev = 'COMMENT';
+				note = OWN_PR_NOTE;
+				r = await send(ev);
 			}
+			if (!r.ok) throw fail('GitHub didn’t take the review', r);
 			let out = {};
 			try {
 				out = JSON.parse(r.stdout);
 			} catch {
 				// posted, but gh's answer was not JSON
 			}
-			return { url: out.html_url ?? pr.url, id: out.id ?? null };
+			return { url: out.html_url ?? pr.url, id: out.id ?? null, event: ev, note };
+		},
+
+		/** Who gh is signed in as, or null when it can't say. */
+		async login() {
+			const r = await run(['api', 'user', '--jq', '.login'], { timeoutMs: 15_000 });
+			return r.ok ? r.stdout.trim() || null : null;
+		},
+
+		/**
+		 * One file as it is at a commit, for the chat's file drawer: its text, or
+		 * null when the file isn't there (deleted at that commit).
+		 */
+		async file(pr, path) {
+			const clean = String(path ?? '');
+			if (
+				!clean ||
+				clean.length > 1000 ||
+				clean.split('/').some((x) => !x || x === '.' || x === '..')
+			)
+				throw new GitHubError('That isn’t a file in this pull request.', 400);
+			if (!/^[0-9a-f]{7,64}$/i.test(pr.headSha ?? ''))
+				throw new GitHubError('This review doesn’t know the commit it was made at.', 400);
+			const enc = clean.split('/').map(encodeURIComponent).join('/');
+			const r = await run(
+				[
+					'api',
+					'-H',
+					'Accept: application/vnd.github.raw',
+					`repos/${pr.owner}/${pr.repo}/contents/${enc}?ref=${pr.headSha}`
+				],
+				{ timeoutMs: 30_000, maxBytes: 8 * 1024 * 1024 }
+			);
+			if (r.ok) return r.stdout;
+			if (/not found|404/i.test(r.stderr)) return null;
+			throw fail('The file couldn’t be read', r);
+		},
+
+		/**
+		 * The project as a whole, for the chat's context: the repository's
+		 * description, language and topics, and the start of its README.
+		 */
+		async project(owner, repo) {
+			const [meta, readme] = await Promise.all([
+				run(['api', `repos/${owner}/${repo}`], { timeoutMs: 20_000 }),
+				run(['api', '-H', 'Accept: application/vnd.github.raw', `repos/${owner}/${repo}/readme`], {
+					timeoutMs: 20_000,
+					maxBytes: 2 * 1024 * 1024
+				})
+			]);
+			if (!meta.ok) throw fail('The project couldn’t be read', meta);
+			let r;
+			try {
+				r = JSON.parse(meta.stdout);
+			} catch {
+				throw new GitHubError('gh answered with something that isn’t JSON.');
+			}
+			return {
+				repo: `${owner}/${repo}`,
+				url: String(r.html_url ?? `https://github.com/${owner}/${repo}`),
+				description: String(r.description ?? ''),
+				language: r.language ? String(r.language) : null,
+				topics: Array.isArray(r.topics) ? r.topics.map(String).slice(0, 12) : [],
+				stars: Number(r.stargazers_count ?? 0),
+				branch: String(r.default_branch ?? 'main'),
+				readme: readme.ok ? readme.stdout.slice(0, 6000) : null
+			};
 		}
 	};
 }

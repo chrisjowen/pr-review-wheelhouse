@@ -79,10 +79,17 @@ export function createHandler({ reviews, store, config, version, model }) {
 				return { prompts: next, defaults: DEFAULT_PROMPTS };
 			}
 		],
+		['GET', /^\/api\/identity$/, async () => reviews.identity()],
 		['GET', /^\/api\/reviews$/, async () => ({ reviews: reviews.list() })],
 		['POST', /^\/api\/reviews$/, async (_m, body) => reviews.open(String(body?.url ?? ''))],
 		['GET', /^\/api\/reviews\/([\w.-]+)$/, async (m) => reviews.view(m[1])],
 		['DELETE', /^\/api\/reviews\/([\w.-]+)$/, async (m) => reviews.restart(m[1])],
+		[
+			'GET',
+			/^\/api\/reviews\/([\w.-]+)\/file$/,
+			async (m, _b, url) => reviews.file(m[1], url.searchParams.get('path') ?? '')
+		],
+		['GET', /^\/api\/reviews\/([\w.-]+)\/project$/, async (m) => reviews.project(m[1])],
 		[
 			'POST',
 			/^\/api\/reviews\/([\w.-]+)\/focus$/,
@@ -179,7 +186,7 @@ export function createHandler({ reviews, store, config, version, model }) {
 				}
 			}
 			try {
-				return send(200, withDeck(await fn(match, body)));
+				return send(200, withDeck(await fn(match, body, url)));
 			} catch (e) {
 				const status = e instanceof ReviewError || e instanceof GitHubError ? e.status : 500;
 				return send(status, { error: e?.message || 'Something went wrong.' });

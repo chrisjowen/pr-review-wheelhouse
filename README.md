@@ -1,17 +1,21 @@
 # pr-review-wheelhouse
 
-A [Wheelhouse](https://github.com/chrisjowen/wheelhouse) plugin that adds a **PR review** tab to each project. Point it at a pull request and it walks you through the review in stages instead of handing you the whole list of changed files at once:
+A [Wheelhouse](https://github.com/chrisjowen/wheelhouse) plugin that adds a **PR review** tab to each project. Point it at a pull request and a reviewer reads the whole PR, then walks you through it in a chat, one change at a time, instead of handing you the list of changed files.
 
-1. **Walkthrough**: what the PR does and why, the screenshots and evidence from its description, its checks, where the changed files went, and the reading plan.
-2. **Quality pass**: readability and structure only (nesting, long functions, duplication, names). Keep a finding to send it as a suggestion, or dismiss it.
-3. **Stops**: the important changes, one to three files at a time, with the reviewer's notes pinned above the lines they discuss, a complexity rating, alternative approaches and its pick.
-4. **Skim pile**: everything else, one line and a risk level each. Generated files (build output, lockfiles, snapshots) stay hidden.
+![The chat review of a real pull request (chrisjowen/docket#48) in the PR review tab: the navigator on the left with each change marked by its verdict, and in the chat a Performance risk change filed as Serious, with its code](docs/images/chat-card.png)
 
-![The walkthrough of a real pull request (chrisjowen/docket#48) in the PR review tab: the stages down the left, the reviewer's summary in the middle and the review mate's chat on the right](docs/images/walkthrough.png)
+It is the same review screen as the [PR review web app](https://github.com/chrisjowen/pr-review-app) at pr.chrisjowen.net: the screens live here, in `wheelhouse/ui/`, and each host plugs in its own sign-in, reviewer and GitHub. In Wheelhouse they are all on your computer:
 
-A chat sits beside the code at every stage. It opens each stage with the reviewer's take and a few questions you might ask. You can click line numbers to attach lines to a question, or switch it to **Request change** to pin a change request under a line. **Finish review** suggests a verdict from your notes and drafts the review. From there you can post it to GitHub, or send the change requests to Firstmate. Nothing is posted or sent until you click.
+- the reviewer is Claude through your own Claude Code sign-in (or a local Ollama model), so a review costs nothing extra;
+- `gh` reads the pull request and posts your review, signed in as you, so private repositories just work.
 
-The reviewer is Claude by default, run through Claude Code's headless mode. A local model through [Ollama](https://ollama.com) is the other choice (see [Settings](#settings)).
+The review:
+
+1. **An overview** of the PR: what it does, what needs your attention, what was asked and whether it's met, its checks, and the shape of the review (every change, coloured by its verdict).
+2. **Context**, offered when you haven't reviewed the repo here before or the PR is large: _the project as a whole_ (its description and README) or _the story_ behind the PR (why it was made, what the author showed works, its description). A **Context** button is there either way.
+3. **The changes**, one message each, in reading order: the _Key changes_ a stop at a time, then a _Quality pass_ that opens with every concern in the review as a checklist, then the _Skim pile_ (generated files last). Each change has its main verdict and maybe a second one (Looks good, Explanation, Exemplary, Code smell, Over-complex, Not well tested, Doesn't meet acceptance criteria, Performance risk, Possible security issue), filed as _What I like_, _Worth knowing_, _Needs work_ or _Serious_. Serious is the verdicts that block: security, acceptance criteria, tests and performance. The code comes with its key lines highlighted and **Open full file**, a problem comes with a suggestion, and follow-up questions sit under it.
+4. **Accept**, **Disagree** or **Comment** on each change (or `A`, `D`, `C`); deciding moves on to the next open change. Type anything to ask the reviewer about the change in front of you (a line number opens the file there too), or "next", "back", "finish".
+5. **Finish review** drafts your verdict: _Request changes_ once you've accepted a blocking concern, _Comment_ for other feedback, _Approve_ otherwise. Post it to the pull request, copy it as Markdown, or send the change requests to Firstmate.
 
 ## Install
 
@@ -28,43 +32,31 @@ You need:
 
 ## Using it
 
-The tab lists the project's open pull requests and takes any GitHub PR URL. Nothing is read or reviewed until you click Review. The tab reopens the review you had open last, as the engine kept it, without reading the PR again; **Check for new commits** reads it again with `gh`. `?pr=<number or URL>` on the tab's address does the same for a PR the engine already keeps; any other PR waits in the URL box for your click. The tab declares `opensPullRequest: '?pr={url}'`, so a Review link on a Wheelhouse chat card opens the PR here the same way, and still waits for your click. Older Wheelhouse versions ignore that field.
+The tab lists the project's open pull requests and takes any GitHub PR URL. Nothing is read or reviewed until you click Review. The tab reopens the review you had open last, as the engine kept it, without reading the PR again, and **Reviews you started** picks any other up where you left it; **Check for new commits** in the review's bar reads it again with `gh`. `?pr=<number or URL>` on the tab's address does the same for a PR the engine already keeps; any other PR waits in the URL box for your click. The tab declares `opensPullRequest: '?pr={url}'`, so a Review link on a Wheelhouse chat card opens the PR here the same way, and still waits for your click. Older Wheelhouse versions ignore that field.
 
 The first time, the tab asks you to **Start the engine**. The engine is the plugin's companion service, a small server on `127.0.0.1` that does the slow work: reading the PR, the reviewer's passes, the chat, and posting. Wheelhouse starts it only on that click. It keeps running after Wheelhouse stops, and it opens a tab that closes itself.
 
-Opening a PR reads it with `gh` (description, commits, checks and diff), sorts the changed files, and runs the walkthrough. The walkthrough proposes the stops. The plugin holds that proposal to the real file list, so the reviewer can't hide a source file as "generated", put a test or doc in a stop, or leave the biggest change out. The other stages then run one at a time behind the walkthrough, and the stage you are looking at goes first. A review is kept per PR head, so reopening a PR costs nothing, and a new push starts a fresh review.
+Opening a PR reads it with `gh` (description, commits, checks and diff), sorts the changed files, and runs the walkthrough, which writes the overview and proposes the stops. The plugin holds that proposal to the real file list, so the reviewer can't hide a source file as "generated", put a test or doc in a stop, or leave the biggest change out. The other passes then run one at a time behind it, and the one the chat is about to reach goes first; if you get there before it's done, the chat says so and carries on when it is. A review is kept per PR head, so reopening a PR costs nothing, and a new push starts a fresh review.
 
-Move between stages with the passage on the left, **Mark reviewed, next stop**, or the `[` and `]` keys. Each stage has **Read again**, which runs it again with the prompts as they are now.
+Beside the chat, never instead of it, the **navigator** lists the passage's groups and stops (each change as a dot in its verdict's colour) and every changed file, GitHub-style, with a filter. Ctrl+E (⌘E on a Mac) opens a quick switcher over the files and changes; jumping anywhere moves the conversation there. **Open full file** shows the file whole in a drawer, at the head the review was made at, with its lines lit and its changes a tab away.
 
-The quality pass lists readability notes on the changed source, each with its lines and a suggested fix. **Keep** sends a note to the author as a suggestion; **Dismiss** drops it.
+![A whole file open in the drawer beside the chat, at the lines the change is about](docs/images/chat-file.png)
 
-![The quality pass: a note marked "Worth changing" on a long function, with its diff lines, the suggestion, and Keep, Dismiss and Discuss buttons](docs/images/quality-pass.png)
-
-At each stop the reviewer's notes sit above the lines they discuss. **Request a change here** pins a change request under those lines, and the chat answers questions about the stop.
-
-![Stop 1 of the review: a reviewer note pinned above lines 61 to 64, a change request pinned under them, and the chat answering a question about the stop's ranking query](docs/images/stop.png)
-
-Each stop ends with other ways the change could have been written, each with its gains and costs, and the one the reviewer would pick.
-
-![Other ways to do it: three alternative approaches with their gains and costs, labelled Worse, Consider and Recommend](docs/images/alternatives.png)
-
-The skim pile gives every remaining file one line and a risk level. Expand a row to see its diff.
-
-![The skim pile: the remaining files, each with a one-line summary, its size and a risk dot, and generated files hidden](docs/images/skim-pile.png)
+A disagreement can be remembered for this PR, for you, or for everyone reviewing the repo. For now it is kept with the review, for a later memory feature.
 
 ### Finishing
 
-**Finish review** shows what you asked for and suggests a verdict: _Request changes_ once you have asked for any change, _Comment_ when you have kept only suggestions, _Approve_ otherwise. The draft is editable.
+**Finish review** (in the navigator, or say "finish") lists what you decided and suggests a verdict. The draft is editable.
 
-- **Post to GitHub** asks you to confirm. It then posts a pull request review on the head you reviewed. Change requests and kept suggestions that sit inside one hunk of the diff become inline comments; the rest go in the summary with their file and lines. GitHub doesn't let you approve or request changes on your own PR, and the tab says so; post it as a comment instead.
+- **Post to GitHub** posts a pull request review on the head you reviewed, with `gh`, as the account `gh` is signed in as. The changes you accepted or commented on become inline comments when their lines sit inside one hunk of the diff; the rest go in the summary with their file and lines. GitHub doesn't let you approve or request changes on your own pull request, so there it goes up as a comment, and the chat says so. Once it's posted, Finish shows the posted review instead of offering to post again.
+- **Copy as Markdown** copies the PR, the verdict, the commit reviewed, the summary and the line comments.
 - **Send to Firstmate** shows the message: the PR's URL, then each change with its file and lines. **Open in Firstmate's chat** puts it in Wheelhouse's chat box, the same handoff the GitHub issues plugin uses. Nothing is sent until you send it there.
-- **Copy review** copies the summary and comments.
 
-![Finish the review: the suggested verdict Request changes, the editable summary, the two inline comments, and the message for Firstmate](docs/images/finish-review.png)
+![Finishing the review: the decisions, the suggested verdict Request changes, the editable draft and the buttons to post, copy or send it](docs/images/chat-finish.png)
 
 ### Prompts
 
-**Prompts** opens the overall review prompt and the four stage prompts (walkthrough, quality pass, stops, skim pile). They are saved for every review as you type. Each pass gets the overall prompt first, then its stage's prompt, then only that stage's context, then a fixed description of the JSON to answer with. That last part isn't editable, so a reworded prompt can't break how the answer is read.
+**Review prompts**, under the pull requests, and **Prompts** in a review's bar open the overall review prompt and the four stage prompts (walkthrough, quality pass, stops, skim pile). They are saved for every review as you type. Each pass gets the overall prompt first, then its stage's prompt, then only that stage's context, then a fixed description of the JSON to answer with. That last part isn't editable, so a reworded prompt can't break how the answer is read. **Start the review over**, at the foot of the panel in a review, reads the PR again with the prompts as they are now and forgets your decisions and the chat.
 
 ![The review prompts panel: the overall review prompt and the walkthrough, quality pass, key change stops and skim pile prompts, each editable](docs/images/prompts.png)
 
@@ -98,7 +90,40 @@ With `backend` set to `ollama`, each stage is one Ollama `/api/chat` call. A 7B 
 
 ## Using the engine in another host
 
-The engine and the tab are plain modules, so another host can run them itself. The [PR review web app](https://github.com/chrisjowen/pr-review-app) does, pinning this repo by commit. Nothing here changes the plugin: in Wheelhouse the reviewer is still Claude or Ollama, and the tab is as described above.
+The engine and the review screens are plain modules, so another host can run them itself. The [PR review web app](https://github.com/chrisjowen/pr-review-app) does, pinning this repo by commit. Nothing here changes the plugin: in Wheelhouse the reviewer is still Claude or Ollama, and the tab is as described above.
+
+### The chat review in another host
+
+`wheelhouse/ui/chat.js` is the chat review on its own: the `<pr-review-chat>` element, and `mountChat(root, host)` to draw it into any root. It has no build step and imports only its neighbours (`chat-core.js`, `chat-styles.js`, `draft.js`, `styles.js`). It draws in its own shadow root, on the page's CSS variables (`--background`, `--foreground`, `--card`, `--border`, `--primary`, `--brass`, `--sea` and the rest, as Wheelhouse and the web app both set them), so it follows the page's light or dark theme. The chat never reaches the network itself; everything goes through the `host` it is given:
+
+```js
+import 'pr-review-wheelhouse/wheelhouse/ui/chat.js';
+
+const chat = document.createElement('pr-review-chat');
+chat.host = {
+	pr: 'https://github.com/owner/repo/pull/12',
+	// id: 'owner__repo__12',     // a review the host has already opened; else the chat opens it
+	// Storage, and the reviewer behind it: the engine's API.
+	api: (method, path, body) => callTheEngine(method, path, body),
+	// Who is reviewing, to tell their own pull request.
+	identity: { login: async () => 'octocat' },
+	// The model backend: whether it answers now, and what to say when it can't.
+	reviewer: { live: true, name: 'Claude (sonnet)', offline: 'Add a key to ask questions.' },
+	// GitHub: whether Finish posts (else it copies), a changed file whole, the project.
+	github: {
+		post: true,
+		file: async (review, path) => 'the file’s text at review.pr.headSha',
+		project: async (review) => ({ repo, url, description, language, topics, stars, readme })
+	},
+	features: { firstmate: false }, // Send to Firstmate, in Finish
+	back: { title: 'The reading plan', href: '/owner/repo/pull/12' }, // or onClick
+	links: [{ text: 'Account', href: '/account' }], // more of the bar; each an href or an onClick
+	note: 'Claude (sonnet) on your key' // a line about the reviewer, in the bar
+};
+document.body.append(chat);
+```
+
+`api` takes the engine's paths (`/api/reviews`, `/api/reviews/<id>`, `…/focus`, `…/run`, `…/ask`, `…/card`, `…/post`) and answers with the engine's JSON, rejecting with an `Error` that says what went wrong. In Wheelhouse, the tab hands the chat its engine, and its `file`, `project` and `login` are the engine's own reads with `gh` (see [What it reads and writes](#what-it-reads-and-writes)). `chat-core.js` is the chat's logic without the page (what a card says, the reading order, when to offer context, what a typed line means), and Node's tests read it as the page does.
 
 ### An OpenAI-compatible reviewer
 
@@ -129,7 +154,7 @@ Each answer is streamed, and asks for usage in its last chunk. Besides the usual
 
 ### Cards: one verdict per change
 
-The engine also writes the review as **cards**, one per change, for a host that shows a review a change at a time (the web app does). The plugin's tab doesn't show them yet: it reads the same passes as quality findings and stop notes, as before.
+The engine also writes the review as **cards**, one per change. The chat review shows them a change at a time, in the plugin's tab and in the web app.
 
 Cards cost no extra calls. The stops, the quality pass and the skim pile each write their cards in the one call they already make, and the walkthrough lists what the PR was asked to do (its acceptance items, from the description) for the cards to check against. A card's chat reads only that card, its lines and its own files, so it is cheaper than a stage's.
 
@@ -193,18 +218,17 @@ A review kept from before cards, and an answer in the older shape, still read as
 
 ### What the host lets the tab do
 
-The tab reads `host.features`. Wheelhouse sets none of them, so the plugin keeps its defaults.
+The `pr-review-tab` element reads `host.features`. Wheelhouse sets none of them, so the plugin keeps its defaults.
 
-| Feature     | Default | What it does                                                                                                        |
-| ----------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `post`      | on      | **Post to GitHub** in Finish review. Off, the copy button becomes the main one.                                     |
-| `firstmate` | on      | **Send to Firstmate** in Finish review.                                                                             |
-| `markdown`  | off     | The copy button becomes **Copy as Markdown**: the PR, the verdict, the commit reviewed, the summary and line notes. |
-| `autoOpen`  | off     | A `?pr=` link the engine doesn't keep opens straight away instead of waiting for a click on Review.                 |
+| Feature     | Default | What it does                                                                                        |
+| ----------- | ------- | --------------------------------------------------------------------------------------------------- |
+| `post`      | on      | **Post to GitHub** in Finish review. Off, **Copy as Markdown** becomes the main button.             |
+| `firstmate` | on      | **Send to Firstmate** in Finish review.                                                             |
+| `autoOpen`  | off     | A `?pr=` link the engine doesn't keep opens straight away instead of waiting for a click on Review. |
 
-When a host's `github.post` answers with an `event` other than the one asked for (say, a comment on the captain's own pull request) and a `note` saying why, the review keeps both in `posted`.
+When a host's `github.post` answers with an `event` other than the one asked for (say, a comment on the captain's own pull request) and a `note` saying why, the review keeps both in `posted`, and the chat shows the note. The plugin's own `gh` does this for your own pull request.
 
-The tab's data can also carry `settings.label`, the reviewer's name to show, and `settings.where`, how it runs (shown after the name, such as "through OpenRouter"). The Markdown copy comes from `reviewMarkdown(review, finish, body, draft)`, exported from `wheelhouse/ui/index.js`.
+The tab's data can also carry `settings.label`, the reviewer's name to show, and `settings.where`, how it runs (shown after the name, such as "through OpenRouter"; else "on this computer"). The Markdown copy comes from `reviewMarkdown(review, finish, body, draft)` in `wheelhouse/ui/draft.js` (also exported from `wheelhouse/ui/index.js`).
 
 ## What it reads and writes
 
@@ -213,6 +237,7 @@ The Wheelhouse side is read-only. Its provider runs one `gh pr list` in the proj
 The engine:
 
 - reads with `gh pr view` and `gh pr diff`;
+- for the chat, reads one of the review's changed files whole at the head it was made at (`GET /api/reviews/<id>/file?path=…`, with `gh api repos/<owner>/<repo>/contents/<path>?ref=<head>`; any file the PR doesn't change, and any binary file, is refused), the project's description, topics and README (`GET /api/reviews/<id>/project`, with `gh api repos/<owner>/<repo>` and `…/readme`), and who `gh` is signed in as (`GET /api/identity`, with `gh api user`);
 - posts with `gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews`, only from **Post to GitHub** after you confirm;
 - keeps your prompts and one file per review in its state directory: `$PR_REVIEW_STATE_DIR`, else `$XDG_STATE_HOME/pr-review-wheelhouse`, else `~/.local/state/pr-review-wheelhouse`.
 
@@ -239,11 +264,14 @@ The plugin has no runtime dependencies and no build step. Wheelhouse imports `wh
   - `model.js`: the reviewer, Claude Code, Ollama or an OpenAI-compatible API, behind one interface.
   - `github.js`: `gh`.
   - `diff.js`: reading the diff.
-- `wheelhouse/ui/`: the `pr-review-tab` element.
-  - `draft.js`: drafting the GitHub review and the Firstmate message, shared with the engine.
+- `wheelhouse/ui/`: the review screens, shared with the web app.
+  - `index.js`: the `pr-review-tab` element: the engine, the pull request picker, the prompts, and the chat with Wheelhouse's host.
+  - `chat.js`: the `pr-review-chat` element, the chat review itself; `chat-core.js`, its logic without the page; `chat-styles.js`, its styles.
+  - `styles.js`: the shared tokens and the tab's styles.
+  - `draft.js`: drafting the GitHub review, its Markdown and the Firstmate message, shared with the engine.
   - `cards.js`: the verdict set and the deck of cards, shared with the engine.
 
-The tests use a fake `gh`, a fake model and a fake `claude`, so they need none of the three installed.
+The tests use a fake `gh`, a fake model and a fake `claude`, so they need none of the three installed. `test/ui.test.js` drives the tab and the chat in a page (happy-dom) against the real engine over HTTP; `test/chat-core.test.js` reads the chat's logic against a real review the web app seeds (`test/fixtures/docket-48.review.json`).
 
 ## Licence
 
