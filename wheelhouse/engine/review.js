@@ -416,6 +416,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 					updatedAt: r.updatedAt,
 					reviewed: r.reviewed.length,
 					stages: r.stages.length,
+					decided: Object.keys(r.cardDecisions ?? {}).length,
 					posted: r.posted ?? null
 				}));
 		},
@@ -471,6 +472,34 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 		},
 
 		view: (id) => get(id),
+
+		/**
+		 * One of the review's changed files whole, at the head the review was made
+		 * at, so it lines up with the review's diff. Only files the review changes
+		 * are read, so this reads nothing else from GitHub.
+		 */
+		async file(id, path) {
+			const r = get(id);
+			if (!r.files.some((f) => f.path === path))
+				throw new ReviewError('That file isn’t part of this pull request.', 404);
+			if (!github.file) throw new ReviewError('This host can’t read whole files.', 501);
+			const text = await github.file(r.pr, path);
+			if (text === null)
+				throw new ReviewError('That file isn’t there at the PR’s head (it was deleted).', 404);
+			return { path, sha: r.pr.headSha, text };
+		},
+
+		/** The review's project as a whole: its description, topics and the start of its README. */
+		async project(id) {
+			const r = get(id);
+			if (!github.project) throw new ReviewError('This host can’t read the project.', 501);
+			return github.project(r.pr.owner, r.pr.repo);
+		},
+
+		/** Who posts: the GitHub login the host is signed in as, or null. */
+		async identity() {
+			return { login: github.login ? await github.login() : null };
+		},
 
 		/** The stage the captain is looking at; its pass runs next. */
 		focus(id, stageId) {

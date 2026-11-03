@@ -198,3 +198,19 @@ describe('a review over HTTP', () => {
 		assert.equal((await res.json()).model, 'llama3.1');
 	});
 });
+
+describe('what the chat reads through the engine', () => {
+	it('answers a changed file, the project and who gh is', async () => {
+		await call('POST', '/api/reviews', { url: PR_URL });
+		const file = await call('GET', '/api/reviews/acme__lumen__48/file?path=src%2Fsearch.ts');
+		assert.equal(file.status, 404, 'the fake gh keeps no file text');
+		assert.match((await file.json()).error, /isn’t there at the PR’s head/);
+		const other = await call('GET', '/api/reviews/acme__lumen__48/file?path=nope.ts');
+		assert.match((await other.json()).error, /isn’t part of this pull request/);
+		const project = await call('GET', '/api/reviews/acme__lumen__48/project');
+		assert.equal((await project.json()).description, 'Graph search on a board');
+		const who = await call('GET', '/api/identity');
+		assert.deepEqual(await who.json(), { login: 'reviewer' });
+		await reviews.settled();
+	});
+});

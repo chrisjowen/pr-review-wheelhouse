@@ -3,7 +3,7 @@
 	"name": "pr-review",
 	"displayName": "PR review",
 	"version": "0.1.0",
-	"description": "A project tab that reviews a pull request as a guided, staged discussion: a walkthrough, a quality pass, the key changes a few files at a time, then a skim pile, with a chat beside the code. Claude (through Claude Code) reviews by default, or a local Ollama model. The review is posted to GitHub or sent to Firstmate only when you click.",
+	"description": "A project tab that reviews a pull request as a chat, one change at a time: its verdict and its code, to accept, disagree with or comment on, then a draft review to post. The same review as the PR review web app, on this computer: Claude (your Claude Code sign-in) or a local Ollama model reviews, and gh reads and posts as you. Nothing is posted until you click.",
 	"author": {
 		"name": "Chris Owen",
 		"url": "https://github.com/chrisjowen"

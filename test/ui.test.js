@@ -1,3 +1,10 @@
+/**
+ * The tab in a page (happy-dom), against the real engine over HTTP with a
+ * fake `gh` and a fake model: the engine and the pull request picker, then
+ * the chat review (`pr-review-chat`) as Wheelhouse hosts it, then a host
+ * that turns some finishes off.
+ */
+
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, before, describe, it } from 'node:test';
@@ -6,29 +13,43 @@ import { createGitHub } from '../wheelhouse/engine/github.js';
 import { createHandler } from '../wheelhouse/engine/http.js';
 import { createReviews } from '../wheelhouse/engine/review.js';
 import { memoryStore } from '../wheelhouse/engine/store.js';
-import { ANSWERS, fakeGh, fakeModel, PR_URL, sampleView } from './helpers.js';
+import { CARD_ANSWERS, fakeGh, fakeModel, PR_URL, sampleView } from './helpers.js';
 
-const window = new Window({ url: 'http://127.0.0.1:4310/projects/lumen/pr-review/review' });
-const gh = fakeGh({ view: sampleView({ title: 'Draw <img src=x onerror=alert(1)> boards' }) });
-const model = fakeModel(ANSWERS);
-const reviews = createReviews({
-	github: createGitHub(gh.run),
-	store: memoryStore(),
-	model: () => model
+const ID = 'acme__lumen__48';
+const window = new Window({
+	url: 'http://127.0.0.1:4310/projects/lumen/pr-review/review',
+	// The chat paces its messages; with reduced motion it barely waits.
+	settings: { device: { prefersReducedMotion: 'reduce' } }
 });
-const handle = createHandler({
-	reviews,
-	store: memoryStore(),
-	version: '0.1.0',
-	model: () => model,
-	config: { get: () => ({}), set: (c) => c }
-});
-const server = createServer((req, res) => void handle(req, res));
-let engineUrl;
+const LEGACY = Array.from({ length: 160 }, (_, i) => `line ${i + 1} of legacy`).join('\n');
+
+/** An engine on loopback with its own store, `gh` and model. */
+async function engine(gh = fakeGh()) {
+	const model = fakeModel(CARD_ANSWERS);
+	const reviews = createReviews({
+		github: createGitHub(gh.run),
+		store: memoryStore(),
+		model: () => model
+	});
+	const handle = createHandler({
+		reviews,
+		store: memoryStore(),
+		version: '0.1.0',
+		model: () => model,
+		config: { get: () => ({}), set: (c) => c }
+	});
+	const server = createServer((req, res) => void handle(req, res));
+	await new Promise((res) => server.listen(0, '127.0.0.1', res));
+	return {
+		gh,
+		model,
+		reviews,
+		url: `http://127.0.0.1:${server.address().port}`,
+		close: () => new Promise((res) => server.close(res))
+	};
+}
 
 before(async () => {
-	await new Promise((res) => server.listen(0, '127.0.0.1', res));
-	engineUrl = `http://127.0.0.1:${server.address().port}`;
 	for (const k of [
 		'window',
 		'document',
@@ -36,10 +57,12 @@ before(async () => {
 		'customElements',
 		'Node',
 		'localStorage',
-		'navigator'
+		'navigator',
+		'matchMedia'
 	]) {
 		Object.defineProperty(globalThis, k, {
-			value: k === 'window' ? window : window[k],
+			value:
+				k === 'window' ? window : k === 'matchMedia' ? window.matchMedia.bind(window) : window[k],
 			configurable: true,
 			writable: true
 		});
@@ -47,7 +70,6 @@ before(async () => {
 	await import('../wheelhouse/ui/index.js');
 });
 after(async () => {
-	server.close();
 	await window.happyDOM.close();
 });
 
@@ -69,7 +91,7 @@ const DATA = {
 		}
 	],
 	reason: null,
-	settings: { backend: 'ollama', ollamaModel: 'fake:7b', claudeModel: 'sonnet' }
+	settings: { backend: 'claude', ollamaModel: 'fake:7b', claudeModel: 'sonnet' }
 };
 
 function mount(host, data = DATA) {
@@ -92,38 +114,49 @@ const $ = (el, sel) => el.shadowRoot.querySelector(sel);
 const $$ = (el, sel) => [...el.shadowRoot.querySelectorAll(sel)];
 const text = (el) => el.shadowRoot.textContent.replace(/\s+/g, ' ');
 const button = (el, label) => $$(el, 'button').find((b) => b.textContent.trim() === label);
-async function until(fn, ms = 4000) {
+/** The chat's own shadow root, inside the tab's. */
+const chat = (el) => $(el, 'pr-review-chat')?.shadowRoot ?? null;
+const inChat = (el, sel) => chat(el)?.querySelector(sel) ?? null;
+const allInChat = (el, sel) => [...(chat(el)?.querySelectorAll(sel) ?? [])];
+const said = (el) => (chat(el)?.querySelector('#log')?.textContent ?? '').replace(/\s+/g, ' ');
+const enabled = (el, sel) => allInChat(el, sel).filter((b) => !b.disabled);
+async function until(fn, ms = 5000) {
 	const end = Date.now() + ms;
 	while (Date.now() < end) {
 		if (fn()) return;
 		await new Promise((r) => setTimeout(r, 20));
 	}
+	const el = globalThis.__el;
 	throw new Error(
-		`timed out: ${globalThis.__el ? globalThis.__el.shadowRoot.querySelector('.app')?.textContent.replace(/\s+/g, ' ').slice(0, 900) : ''}`
+		`timed out: ${el ? (chat(el) ? said(el) : text(el)).slice(-900) : ''}`.replace(/\s+/g, ' ')
 	);
 }
-const running = () => ({
-	launched: [],
+/** Types a line into the chat's composer and sends it. */
+function type(el, line) {
+	const input = inChat(el, '#input');
+	input.value = line;
+	inChat(el, '#composer').requestSubmit();
+}
+const running = (e) => ({
 	async service() {
-		return { state: 'running', url: engineUrl, launchable: false, hint: null };
+		return { state: 'running', url: e.url, launchable: false, hint: null };
 	},
 	async launch() {}
 });
 
 describe('before the engine runs', () => {
+	let e;
+	before(async () => (e = await engine()));
+	after(() => e.close());
+
 	it('lists the open PRs and offers to start the engine', async () => {
 		const launched = [];
 		let up = false;
 		const el = mount({
 			async service() {
 				return up
-					? { state: 'running', url: engineUrl, launchable: false }
-					: {
-							state: 'stopped',
-							url: engineUrl,
-							launchable: true,
-							hint: 'node main.js --port 4791'
-						};
+					? { state: 'running', url: e.url, launchable: false }
+					: { state: 'stopped', url: e.url, launchable: true, hint: 'node main.js --port 4791' };
 			},
 			async launch(id, o) {
 				launched.push([id, o]);
@@ -136,186 +169,292 @@ describe('before the engine runs', () => {
 		assert.ok($(el, '.pr-row button').disabled, 'nothing to review with yet');
 		button(el, 'Start the engine').click();
 		await until(() => !button(el, 'Start the engine'));
-		assert.deepEqual(launched, [['engine', { project: null, open: `${engineUrl}/started` }]]);
+		assert.deepEqual(launched, [['engine', { project: null, open: `${e.url}/started` }]]);
 		assert.equal($(el, '.pr-row button').disabled, false);
 		el.remove();
 	});
 });
 
-describe('a review in the tab', () => {
+describe('a chat review in the tab', () => {
+	let e;
 	let el;
 	before(async () => {
 		localStorage.clear();
-		el = mount(running());
+		e = await engine(
+			fakeGh({
+				view: sampleView({ title: 'Draw <img src=x onerror=alert(1)> boards' }),
+				files: { 'src/legacy.ts': LEGACY }
+			})
+		);
+		el = mount(running(e));
 		await until(() => $(el, '.pr-row button') && !$(el, '.pr-row button').disabled);
 		$(el, '.pr-row button').click();
-		await until(
-			() => $(el, '.rail') && $$(el, '.stop').length === 5 && /The board now draws/.test(text(el)),
-			8000
+		await until(() => /do you want some context\?/.test(said(el)), 8000);
+	});
+	after(async () => {
+		el.remove();
+		await e.reviews.settled();
+		await e.close();
+	});
+
+	it('opens with an overview of the PR, its text kept as text', () => {
+		const t = said(el);
+		assert.match(t, /I’ve read all 11 files of this pull request/);
+		assert.match(t, /The board now draws the subgraph adapters return\./);
+		assert.match(t, /What was asked/);
+		assert.match(t, /Keep the subgraph each adapter returns/);
+		assert.match(inChat(el, '#prTitle').textContent, /Draw <img src=x onerror=alert\(1\)> boards/);
+		assert.match(t, /Draw <img src=x onerror=alert\(1\)> boards/);
+		assert.equal(allInChat(el, 'img').length, 0, 'no element from the PR’s text');
+		assert.equal(inChat(el, '.cnum').textContent, 'acme/lumen#48');
+		assert.match(inChat(el, '.cnote').textContent, /^Claude \(sonnet\) on this computer/);
+	});
+
+	it('offers context on a repo it hasn’t reviewed, and reads the project through gh', async () => {
+		assert.match(said(el), /You haven’t reviewed this repo here before/);
+		enabled(el, '[data-act="ctx:project"]')[0].click();
+		await until(() => /A board for graph search\./.test(said(el)));
+		assert.match(said(el), /acme\/lumen: Graph search on a board/);
+		assert.ok(
+			e.gh.calls.some((c) => c.argv.join(' ') === 'api repos/acme/lumen'),
+			'the repository, read with gh'
 		);
 	});
-	after(() => el.remove());
 
-	it('opens on the walkthrough with the model’s headline, the evidence and the reading plan', () => {
-		assert.equal(
-			$(el, '.stage h1').textContent,
-			'The board now draws the subgraph adapters return.'
-		);
-		const t = text(el);
-		assert.match(t, /1 of 3 checks passed|1 of 3 checks failing/);
-		assert.match(t, /Screenshots and evidence/);
-		assert.equal($$(el, '.shot img').length, 2);
-		assert.match(t, /The reading plan/);
-		assert.match(t, /Keep the subgraph/);
-		assert.match(t, /fake:7b grouped the files into these stops/);
-		assert.match($(el, '.chat-log').textContent, /This looks big but it is not\./);
+	it('walks the changes one at a time, each with its verdicts and its code', async () => {
+		enabled(el, '#followups [data-act="start"]')[0].click();
+		await until(() => inChat(el, '.ccard.change'));
+		const card = inChat(el, '.ccard.change');
+		const head = card.querySelector('.chead').textContent;
+		assert.match(head, /^Change 1 of \d+ · Key changes · Stop 1: Keep the subgraph/);
+		assert.equal(card.querySelector('h3').textContent, 'Reads other scopes');
 		assert.deepEqual(
-			$$(el, '.suggest-chip').map((b) => b.textContent),
-			['Why not v2?', 'Riskiest part?']
+			[...card.querySelectorAll('.cpk')].map((p) => p.textContent.replace(/\s+/g, ' ').trim()),
+			['SeriousPossible security issue · medium', 'SeriousNot well tested']
 		);
+		assert.match(card.querySelector('.csuggest').textContent, /Count only edges in scope\./);
+		assert.ok(card.querySelector('.ccode .clines tr.foc'), 'its key lines stand out');
+		assert.match(inChat(el, '#contextLine').textContent, /Talking about 1\. Reads other scopes/);
 	});
 
-	it('shows text from the PR as text, never as HTML', () => {
-		assert.equal($(el, '.pr-title').textContent, 'Draw <img src=x onerror=alert(1)> boards');
-		assert.equal($$(el, '.bar img').length, 0);
+	it('opens the whole file in a drawer at the card’s lines', async () => {
+		inChat(el, '.ccard.change .cmini[data-open]').click();
+		await until(() => allInChat(el, '#drawerLines tr').length === 160);
+		assert.ok(inChat(el, '#chatapp').classList.contains('drawer-open'));
+		assert.equal(inChat(el, '#drawerPath').textContent, 'src/legacy.ts');
+		assert.match(inChat(el, '#drawerLines').textContent, /line 121 of legacy/);
+		assert.ok(inChat(el, '#drawerLines tr.foc'), 'the card’s lines stand out');
+		assert.ok(
+			e.gh.calls.some((c) =>
+				c.argv.includes(`repos/acme/lumen/contents/src/legacy.ts?ref=${'a'.repeat(40)}`)
+			)
+		);
+		inChat(el, '#drawerClose').click();
+		assert.ok(!inChat(el, '#chatapp').classList.contains('drawer-open'));
 	});
 
-	it('moves to a stop with its notes pinned above the hunk, and attaches clicked lines to the chat', async () => {
-		$$(el, '.stop-btn')[2].click();
-		await until(() => $(el, '.note'));
-		assert.match($(el, '.stage h1').textContent, /Keep the subgraph/);
-		assert.match($(el, '.note-title').textContent, /The core/);
-		assert.ok($$(el, 'tr.hot').length > 0, 'the note’s lines are highlighted');
-		const ln = $$(el, 'td.ln.can').find((td) => td.textContent === '121');
-		ln.click();
-		assert.match($(el, '.attach-chip').textContent, /src\/legacy\.ts:121/);
-		const ln2 = $$(el, 'td.ln.can').find((td) => td.textContent === '123');
-		ln2.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
-		assert.match($(el, '.attach-chip').textContent, /src\/legacy\.ts:121–123/);
+	it('answers a question about the change in the card’s own thread', async () => {
+		enabled(el, '.ccard.change [data-ask]')[0].click();
+		await until(() => /Because every new field is optional\./.test(said(el)));
+		const first = inChat(el, '.ccard.change').dataset.card;
+		const thread = e.reviews.view(ID).chat[first];
+		assert.deepEqual(
+			thread.map((m) => m.role),
+			['user', 'assistant']
+		);
+		assert.equal(thread[0].text, 'How would it leak?');
 	});
 
-	it('asks the review mate about the attached lines', async () => {
-		$(el, 'textarea').value = 'Why prefix?';
-		$(el, '.composer').dispatchEvent(new window.Event('submit', { cancelable: true }));
-		await until(() => /Because every new field is optional/.test($(el, '.chat-log').textContent));
-		assert.match($(el, '.msg-user').textContent, /legacy\.ts:121–123Why prefix\?/);
-		assert.equal($(el, '.attach-chip'), null);
-	});
-
-	it('pins a change request under its line', async () => {
-		button(el, 'Request change').click();
-		$$(el, 'td.ln.can')
-			.find((td) => td.textContent === '125')
-			.click();
-		$(el, 'textarea').value = 'Comment the prefix rule.';
-		$(el, '.composer').dispatchEvent(new window.Event('submit', { cancelable: true }));
-		await until(() => $(el, 'tr.inline-req'));
-		assert.match($(el, 'tr.inline-req').textContent, /Change requested: Comment the prefix rule\./);
-		assert.match($(el, '.msg-change').textContent, /Change requested/);
-		await until(() => /1 change asked/.test($(el, '.rail').textContent));
-	});
-
-	it('keeps a quality finding as a suggestion', async () => {
-		$$(el, '.stop-btn')[1].click();
-		await until(() => $(el, '.finding'));
-		const keep = $$(el, '.finding')[0].querySelector('button');
-		keep.click();
-		await until(() => /Goes into your review as a suggestion/.test(text(el)));
-	});
-
-	it('marks a stage reviewed and moves on', async () => {
-		button(el, 'Mark reviewed, next stop').click();
-		await until(() => /Stop 1 of 2/.test($(el, '.stage .eyebrow').textContent));
-		assert.match($(el, '.voyage-label').textContent, /1 of 5 reviewed/);
-	});
-
-	it('drafts the review, and posts it only after the captain confirms', async () => {
-		button(el, 'Finish review').click();
-		await until(() => $(el, '.modal'));
-		assert.equal($(el, '.verdicts .pill-btn.on').textContent, 'Request changes');
-		assert.match($(el, '.draft-body').value, /^1 change requested, and 1 suggestion/);
-		assert.ok(!gh.calls.some((c) => c.argv[0] === 'api'));
-		button(el, 'Post to GitHub').click();
+	it('records a decision in the engine and moves on to the next change', async () => {
+		const first = inChat(el, '.ccard.change').dataset.card;
+		inChat(el, '.ccard.change [data-decide="accept"]').click();
+		await until(() => allInChat(el, '.ccard.change').length === 2);
+		assert.match(said(el), /Accepted\. I’ll ask for this in the review as a blocking change\./);
+		assert.equal(e.reviews.view(ID).cardDecisions[first].decision, 'accept');
 		assert.match(
-			$(el, '.confirm').textContent,
-			/posts a “Request changes” review with 2 inline comments to acme\/lumen#48/
+			allInChat(el, '.ccard.change')[1].querySelector('.chead').textContent,
+			/^Change 2 of/
 		);
-		assert.ok(!gh.calls.some((c) => c.argv[0] === 'api'), 'still nothing posted');
-		button(el, 'Post review').click();
-		await until(() => $(el, '.done-note'));
-		const sent = JSON.parse(gh.calls.find((c) => c.argv[0] === 'api').input);
-		assert.equal(sent.event, 'REQUEST_CHANGES');
-		assert.equal(sent.comments.length, 2);
+		assert.match(inChat(el, '#progressText').textContent, /^1 of \d+ decided$/);
 	});
 
-	it('hands the change requests to Firstmate through the chat box', async () => {
-		button(el, 'Send to Firstmate').click();
-		const link = $$(el, 'a').find((a) => a.textContent === 'Open in Firstmate’s chat');
-		const href = link.getAttribute('href');
-		assert.match(href, /^\/\?draft=/);
+	it('switches files with Ctrl/Cmd+E, and lists the passage beside the chat', async () => {
+		window.dispatchEvent(
+			new window.KeyboardEvent('keydown', { key: 'e', ctrlKey: true, metaKey: true })
+		);
+		assert.ok(inChat(el, '#switcher').classList.contains('open'));
+		const input = inChat(el, '#swInput');
+		input.value = 'search';
+		input.dispatchEvent(new window.Event('input'));
+		assert.match(inChat(el, '#swList button').textContent, /^search\.ts/);
+		input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+		assert.ok(!inChat(el, '#switcher').classList.contains('open'));
+		const groups = allInChat(el, '.cghead .gt').map((g) => g.textContent);
+		assert.deepEqual(groups.slice(0, 2), ['Walkthrough', 'Key changes']);
+		assert.ok(inChat(el, '.crowbtn.here'), 'the change being discussed');
+	});
+
+	it('takes no shortcut while the captain types elsewhere on the page', async () => {
+		const outside = document.createElement('textarea');
+		document.body.append(outside);
+		const before = e.reviews.view(ID).cardDecisions;
+		outside.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+		await new Promise((r) => setTimeout(r, 100));
+		assert.deepEqual(e.reviews.view(ID).cardDecisions, before);
+		outside.remove();
+	});
+
+	it('finishes with a suggested verdict and the draft', async () => {
+		type(el, 'finish');
+		await until(() => inChat(el, '[data-finish]'));
+		const card = inChat(el, '[data-finish]');
+		assert.equal(card.querySelector('input[name="ev"]:checked').value, 'REQUEST_CHANGES');
+		assert.match(said(el), /You accepted at least one blocking concern, so I’d request changes\./);
+		assert.equal(card.querySelector('#reviewBody').value, '1 change requested; see the comments.');
+		assert.deepEqual(
+			[...card.querySelectorAll('.crow button')].map((b) => b.textContent.trim()),
+			['Post to GitHub as reviewer', 'Copy as Markdown', 'Send to Firstmate']
+		);
+	});
+
+	it('hands the change requests to Firstmate through Wheelhouse’s chat box', async () => {
+		inChat(el, '[data-firstmate]').click();
+		await until(() => inChat(el, 'a[href^="/?draft="]'));
+		const href = inChat(el, 'a[href^="/?draft="]').getAttribute('href');
 		const message = decodeURIComponent(href.slice('/?draft='.length));
 		assert.match(message, new RegExp(`^Review fixes for ${PR_URL.replace(/[./]/g, '\\$&')}`));
-		assert.match(message, /1\. Change at src\/legacy\.ts:125: Comment the prefix rule\./);
+		assert.match(
+			message,
+			/\n1\. Change at src\/legacy\.ts:121-123: Possible security issue \(medium\): Reads other scopes\. Count only edges in scope\.$/
+		);
 	});
 
-	it('edits the prompts in a drawer', async () => {
-		$$(el, '.modal-foot .ghost-btn')[0].click();
-		button(el, 'Prompts').click();
-		await until(() => $$(el, '.field textarea').length === 5);
-		assert.match($$(el, '.field label')[0].textContent, /Overall review prompt/);
+	it('posts the review with gh only on a click', async () => {
+		const posts = () => e.gh.calls.filter((c) => c.argv.includes('POST'));
+		assert.equal(posts().length, 0);
+		inChat(el, '[data-post]').click();
+		await until(() => inChat(el, '.cposted'));
+		const sent = JSON.parse(posts()[0].input);
+		assert.equal(sent.event, 'REQUEST_CHANGES');
+		assert.equal(sent.commit_id, 'a'.repeat(40));
+		assert.equal(sent.comments.length, 1);
+		assert.match(inChat(el, '.cposted').textContent, /Request changes posted on acme\/lumen#48/);
+		assert.equal(e.reviews.view(ID).posted.url, `${PR_URL}#pullrequestreview-9`);
+	});
+
+	it('goes back to the pull requests', async () => {
+		inChat(el, '[data-back]').click();
+		await until(() => $(el, '.picker'));
+		assert.equal($(el, 'pr-review-chat'), null);
+		await until(() => /Reviews you started/.test(text(el)));
+		assert.match(text(el), /1 change decided/);
+		assert.match(text(el), /posted to GitHub/);
 	});
 });
 
 describe('coming back to the tab', () => {
+	let e;
+	before(async () => {
+		localStorage.clear();
+		e = await engine();
+		await e.reviews.open(PR_URL);
+		await e.reviews.settled();
+		localStorage.setItem('pr-review.last.lumen', JSON.stringify({ url: PR_URL }));
+	});
+	after(() => e.close());
+
 	it('reopens the last review as kept, and reads the PR again only on a click', async () => {
-		const reads = gh.calls.length;
-		const passes = model.calls.length;
-		const el = mount(running());
-		await until(() => $(el, '.rail'));
-		assert.match($(el, '.voyage-label').textContent, /1 of 5 reviewed/, 'as it was kept');
-		await reviews.settled();
-		assert.equal(gh.calls.length, reads, 'no gh read');
-		assert.equal(model.calls.length, passes, 'no model pass');
-		button(el, 'Check for new commits').click();
-		await until(() => gh.calls.length > reads);
+		const reads = e.gh.calls.length;
+		const passes = e.model.calls.length;
+		const el = mount(running(e));
+		await until(() => /I’ve read all 11 files/.test(said(el)));
+		assert.equal(
+			e.gh.calls.slice(reads).filter((c) => c.argv[0] === 'pr').length,
+			0,
+			'no gh read of the PR'
+		);
+		assert.equal(e.model.calls.length, passes, 'no model pass');
+		assert.equal(inChat(el, '[data-link="0"]').textContent, 'Check for new commits');
+		inChat(el, '[data-link="0"]').click();
+		await until(() => e.gh.calls.slice(reads).filter((c) => c.argv[0] === 'pr').length === 2);
 		assert.deepEqual(
-			gh.calls
+			e.gh.calls
 				.slice(reads)
+				.filter((c) => c.argv[0] === 'pr')
 				.map((c) => c.argv.slice(0, 2).join(' '))
 				.sort(),
 			['pr diff', 'pr view']
 		);
-		await reviews.settled();
+		await until(() => /I’ve read all 11 files/.test(said(el)));
+		await e.reviews.settled();
 		el.remove();
 	});
 
 	it('waits for a click before reviewing a ?pr= link it doesn’t keep', async () => {
 		const other = 'https://github.com/acme/lumen/pull/49';
 		window.happyDOM.setURL(`http://127.0.0.1:4310/projects/lumen/pr-review/review?pr=${other}`);
-		const reads = gh.calls.length;
-		const passes = model.calls.length;
-		const el = mount(running());
+		const reads = e.gh.calls.length;
+		const passes = e.model.calls.length;
+		const el = mount(running(e));
 		await until(() => $(el, '[data-key="pr-url"]')?.value === other);
-		assert.equal($(el, '.rail'), null);
+		assert.equal($(el, 'pr-review-chat'), null);
 		assert.equal(button(el, 'Review').disabled, false);
-		assert.equal(gh.calls.length, reads, 'no gh read');
-		assert.equal(model.calls.length, passes, 'no model pass');
+		assert.equal(e.gh.calls.length, reads, 'no gh read');
+		assert.equal(e.model.calls.length, passes, 'no model pass');
 		el.remove();
 		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
+	});
+
+	it('opens a ?pr= link straight away when the host is itself the click on Review', async () => {
+		const other = 'https://github.com/acme/lumen/pull/49';
+		window.happyDOM.setURL(`http://127.0.0.1:4310/projects/lumen/pr-review/review?pr=${other}`);
+		const reads = e.gh.calls.length;
+		const el = mount({ ...running(e), features: { autoOpen: true } });
+		await until(() => e.gh.calls.length > reads);
+		assert.ok(
+			e.gh.calls.slice(reads).some((c) => c.argv[1] === 'view' && c.argv[2] === '49'),
+			'read PR 49 without a click'
+		);
+		await until(() => $(el, 'pr-review-chat'));
+		await e.reviews.settled();
+		el.remove();
+		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
+	});
+
+	it('leaves the last review it no longer keeps in the box even when the host opens links', async () => {
+		const gone = 'https://github.com/acme/lumen/pull/50';
+		localStorage.setItem('pr-review.last.lumen', JSON.stringify({ url: gone }));
+		const reads = e.gh.calls.length;
+		const el = mount({ ...running(e), features: { autoOpen: true } });
+		await until(() => $(el, '[data-key="pr-url"]')?.value === gone);
+		assert.equal(e.gh.calls.length, reads, 'read no PR without a click');
+		el.remove();
+		localStorage.clear();
 	});
 });
 
 describe('a host that is not Wheelhouse', () => {
+	let e;
+	before(async () => {
+		localStorage.clear();
+		e = await engine();
+		await e.reviews.open(PR_URL);
+		await e.reviews.settled();
+		localStorage.setItem('pr-review.last.lumen', JSON.stringify({ url: PR_URL }));
+	});
+	after(() => e.close());
+
 	it('names the reviewer as the host says', async () => {
-		const el = mount(running(), {
+		const el = mount(running(e), {
 			...DATA,
 			settings: { ...DATA.settings, label: 'Some Model', where: 'through OpenRouter' }
 		});
-		await until(() => $(el, '.rail'));
-		assert.match($(el, '.chat-status').textContent, /^Some Model through OpenRouter$/);
-		button(el, 'Prompts').click();
-		await until(() => $(el, '.drawer-foot'));
+		await until(() => inChat(el, '.cnote'));
+		assert.match(inChat(el, '.cnote').textContent, /^Some Model through OpenRouter · /);
+		inChat(el, '[data-link="1"]').click();
+		await until(() => $(el, '.drawer-foot') && $$(el, '.field textarea').length === 5);
 		assert.match($(el, '.drawer-foot').textContent, /^Reviewer: Some Model(?! \()/);
+		assert.match($$(el, '.field label')[0].textContent, /Overall review prompt/);
 		el.remove();
 	});
 
@@ -326,64 +465,25 @@ describe('a host that is not Wheelhouse', () => {
 			value: { writeText: async (t) => void copied.push(t) },
 			configurable: true
 		});
-		const el = mount({ ...running(), features: { post: false, firstmate: false, markdown: true } });
-		await until(() => $(el, '.rail'));
-		button(el, 'Finish review').click();
-		await until(() => $(el, '.modal'));
+		const el = mount({ ...running(e), features: { post: false, firstmate: false } });
+		await until(() => /do you want some context\?/.test(said(el)));
+		type(el, 'finish');
+		await until(() => inChat(el, '[data-finish]'));
 		assert.deepEqual(
-			$$(el, '.modal-foot button').map((b) => b.textContent.trim()),
-			['Back to the review', 'Copy as Markdown']
+			allInChat(el, '[data-finish] .crow button').map((b) => b.textContent.trim()),
+			['Copy as Markdown']
 		);
-		assert.ok(button(el, 'Copy as Markdown').className.includes('primary-btn'));
-		button(el, 'Copy as Markdown').click();
+		assert.ok(inChat(el, '[data-copy]').classList.contains('primary'));
+		inChat(el, '[data-copy]').click();
 		await until(() => copied.length);
 		assert.match(
 			copied[0],
 			/^## Review of \[acme\/lumen#48\]\(https:\/\/github\.com\/acme\/lumen\/pull\/48\)/
 		);
-		assert.match(copied[0], /\*\*Verdict:\*\* Request changes/);
-		assert.match(copied[0], /### Line comments\n\n- `src\/legacy\.ts:125`: /);
+		assert.match(copied[0], /\*\*Verdict:\*\* Approve/);
 		el.remove();
 		if (clipboard) Object.defineProperty(window.navigator, 'clipboard', clipboard);
 		else delete window.navigator.clipboard;
-	});
-
-	it('keeps every Wheelhouse finish when the host sets no features', async () => {
-		const el = mount(running());
-		await until(() => $(el, '.rail'));
-		button(el, 'Finish review').click();
-		await until(() => $(el, '.modal'));
-		assert.deepEqual(
-			$$(el, '.modal-foot button').map((b) => b.textContent.trim()),
-			['Back to the review', 'Copy review', 'Send to Firstmate', 'Post to GitHub']
-		);
-		el.remove();
-	});
-
-	it('opens a ?pr= link straight away when the host is itself the click on Review', async () => {
-		const other = 'https://github.com/acme/lumen/pull/49';
-		window.happyDOM.setURL(`http://127.0.0.1:4310/projects/lumen/pr-review/review?pr=${other}`);
-		const reads = gh.calls.length;
-		const el = mount({ ...running(), features: { autoOpen: true } });
-		await until(() => gh.calls.length > reads);
-		assert.ok(
-			gh.calls.slice(reads).some((c) => c.argv[1] === 'view' && c.argv[2] === '49'),
-			'read PR 49 without a click'
-		);
-		await reviews.settled();
-		el.remove();
-		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
-	});
-
-	it('leaves the last review it no longer keeps in the box even when the host opens links', async () => {
-		const gone = 'https://github.com/acme/lumen/pull/50';
-		localStorage.setItem('pr-review.last.lumen', JSON.stringify({ url: gone, stage: null }));
-		const reads = gh.calls.length;
-		const el = mount({ ...running(), features: { autoOpen: true } });
-		await until(() => $(el, '[data-key="pr-url"]')?.value === gone);
-		assert.equal(gh.calls.length, reads, 'read no PR without a click');
-		el.remove();
-		localStorage.clear();
 	});
 });
 
@@ -422,49 +522,5 @@ describe('the review as Markdown', () => {
 			].join('\n')
 		);
 		assert.doesNotMatch(reviewMarkdown(r, {}, 'Fine.', { comments: [] }), /Line comments/);
-	});
-});
-
-describe('placing notes on a long hunk', () => {
-	it('cuts the hunk where each note starts', async () => {
-		const { splitAtNotes } = await import('../wheelhouse/ui/index.js');
-		const lines = Array.from({ length: 10 }, (_, i) => ({ t: '+', n: i + 1, text: `l${i + 1}` }));
-		const parts = splitAtNotes(lines, [
-			{ id: 'b', from: 6, to: 7 },
-			{ id: 'a', from: 3, to: 4 },
-			{ id: 'c', from: 6, to: 6 }
-		]);
-		assert.deepEqual(
-			parts.map((p) => [p.notes.map((n) => n.id).join(''), p.lines[0].n, p.lines.at(-1).n]),
-			[
-				['', 1, 2],
-				['a', 3, 5],
-				['bc', 6, 10]
-			]
-		);
-		assert.deepEqual(
-			splitAtNotes(lines, [{ id: 'a', from: 1, to: 2 }]).map((p) => p.notes.length),
-			[1]
-		);
-	});
-});
-
-describe('the model’s text', () => {
-	it('turns paragraphs, headings and lists into elements, and HTML into text', async () => {
-		const { rich } = await import('../wheelhouse/ui/dom.js');
-		const box = document.createElement('div');
-		box.append(
-			...rich(
-				'## Intent\n\nSmallest fix, pick one:\n- **Cypher** side\n- TS side\n\nI’d pick `Cypher`. <img src=x onerror=alert(1)>'
-			)
-		);
-		assert.deepEqual(
-			[...box.children].map((c) => c.tagName),
-			['H4', 'P', 'UL', 'P']
-		);
-		assert.equal(box.querySelectorAll('li').length, 2);
-		assert.equal(box.querySelector('li strong').textContent, 'Cypher');
-		assert.equal(box.querySelector('img'), null);
-		assert.match(box.textContent, /<img src=x onerror=alert\(1\)>/);
 	});
 });
