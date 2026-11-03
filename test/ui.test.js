@@ -253,6 +253,23 @@ describe('a chat review in the tab', () => {
 		assert.ok(!inChat(el, '#chatapp').classList.contains('drawer-open'));
 	});
 
+	it('shows a binary file as a note in the drawer, never reading it whole', async () => {
+		const reads = e.gh.calls.length;
+		window.dispatchEvent(
+			new window.KeyboardEvent('keydown', { key: 'e', ctrlKey: true, metaKey: true })
+		);
+		const input = inChat(el, '#swInput');
+		input.value = 'logo';
+		input.dispatchEvent(new window.Event('input'));
+		input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', shiftKey: true }));
+		await until(() => inChat(el, '#drawerPath').textContent === 'assets/logo.png');
+		inChat(el, '#dtFull').click();
+		assert.equal(inChat(el, '#dtDiff').getAttribute('aria-selected'), 'true');
+		assert.match(inChat(el, '#drawerLines').textContent, /A binary file/);
+		assert.equal(e.gh.calls.length, reads, 'the binary file is never fetched');
+		inChat(el, '#drawerClose').click();
+	});
+
 	it('answers a question about the change in the card’s own thread', async () => {
 		enabled(el, '.ccard.change [data-ask]')[0].click();
 		await until(() => /Because every new field is optional\./.test(said(el)));

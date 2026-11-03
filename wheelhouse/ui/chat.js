@@ -1376,7 +1376,7 @@ export function mountChat(root, host) {
 			line: line ? Number(line) : null,
 			from: from ? Number(from) : null,
 			to: to ? Number(to) : null,
-			mode: mode ?? (f.status === 'deleted' || generated ? 'diff' : 'full')
+			mode: f.binary ? 'diff' : (mode ?? (f.status === 'deleted' || generated ? 'diff' : 'full'))
 		};
 		S.viewed.add(path);
 		if (!app.classList.contains('drawer-open')) keepBottom();
@@ -1446,7 +1446,7 @@ export function mountChat(root, host) {
 				.join('');
 			box.innerHTML = rows
 				? `<table>${rows}</table>`
-				: `<p class="cdim cpad">${f.kind === 'generated' ? 'A generated file: its changes are hidden from the review.' : 'No changes to show.'}</p>`;
+				: `<p class="cdim cpad">${f.binary ? 'A binary file: there’s no text to show.' : f.kind === 'generated' ? 'A generated file: its changes are hidden from the review.' : 'No changes to show.'}</p>`;
 		}
 		const place = () => {
 			const target = line ? box.querySelector(`#L${line}`) : null;

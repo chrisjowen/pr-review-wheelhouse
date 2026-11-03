@@ -515,7 +515,15 @@ describe('what the chat reads besides the review', () => {
 		const reads = gh.calls.length;
 		await assert.rejects(reviews.file(ID, '../../etc/passwd'), { status: 404 });
 		await assert.rejects(reviews.file(ID, 'src/other.ts'), { status: 404 });
-		assert.equal(gh.calls.length, reads, 'a file the PR doesn’t change is never read');
+		await assert.rejects(reviews.file(ID, 'assets/logo.png'), {
+			status: 415,
+			message: /binary file/
+		});
+		assert.equal(
+			gh.calls.length,
+			reads,
+			'a file the PR doesn’t change, or a binary one, is never read'
+		);
 		await assert.rejects(reviews.file(ID, 'src/legacy.ts'), {
 			status: 404,
 			message: /isn’t there at the PR’s head/

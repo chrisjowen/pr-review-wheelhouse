@@ -480,8 +480,10 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 		 */
 		async file(id, path) {
 			const r = get(id);
-			if (!r.files.some((f) => f.path === path))
-				throw new ReviewError('That file isn’t part of this pull request.', 404);
+			const f = r.files.find((x) => x.path === path);
+			if (!f) throw new ReviewError('That file isn’t part of this pull request.', 404);
+			if (f.binary)
+				throw new ReviewError('That’s a binary file, so it can’t be read as text.', 415);
 			if (!github.file) throw new ReviewError('This host can’t read whole files.', 501);
 			const text = await github.file(r.pr, path);
 			if (text === null)
