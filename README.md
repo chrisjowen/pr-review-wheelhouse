@@ -237,7 +237,7 @@ The Wheelhouse side is read-only. Its provider runs one `gh pr list` in the proj
 The engine:
 
 - reads with `gh pr view` and `gh pr diff`;
-- for the chat, reads one of the review's changed files whole at the head it was made at (`GET /api/reviews/<id>/file?path=…`, with `gh api repos/<owner>/<repo>/contents/<path>?ref=<head>`; any file the PR doesn't change is refused), the project's description, topics and README (`GET /api/reviews/<id>/project`, with `gh api repos/<owner>/<repo>` and `…/readme`), and who `gh` is signed in as (`GET /api/identity`, with `gh api user`);
+- for the chat, reads one of the review's changed files whole at the head it was made at (`GET /api/reviews/<id>/file?path=…`, with `gh api repos/<owner>/<repo>/contents/<path>?ref=<head>`; any file the PR doesn't change, and any binary file, is refused), the project's description, topics and README (`GET /api/reviews/<id>/project`, with `gh api repos/<owner>/<repo>` and `…/readme`), and who `gh` is signed in as (`GET /api/identity`, with `gh api user`);
 - posts with `gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews`, only from **Post to GitHub** after you confirm;
 - keeps your prompts and one file per review in its state directory: `$PR_REVIEW_STATE_DIR`, else `$XDG_STATE_HOME/pr-review-wheelhouse`, else `~/.local/state/pr-review-wheelhouse`.
 

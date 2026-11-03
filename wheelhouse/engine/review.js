@@ -475,8 +475,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 
 		/**
 		 * One of the review's changed files whole, at the head the review was made
-		 * at, so it lines up with the review's diff. Only files the review changes
-		 * are read, so this reads nothing else from GitHub.
+		 * at, so it lines up with the review's diff. Only text files the review
+		 * changes are read, so this reads nothing else from GitHub.
 		 */
 		async file(id, path) {
 			const r = get(id);
