@@ -400,6 +400,7 @@ function layout(s) {
 		for (const e of s.edges)
 			if (e.to === id && !back.has(`${e.from}\n${e.to}`) && !seen.has(e.from))
 				d = Math.max(d, depth(e.from, seen) + 1);
+		seen.delete(id);
 		layer.set(id, d);
 		return d;
 	};

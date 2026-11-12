@@ -196,6 +196,34 @@ describe('the diagram', () => {
 		);
 	});
 
+	it('puts every file left of what it imports, however the imports meet', () => {
+		const file = (id) => ({
+			id,
+			kind: 'file',
+			dir: 'src',
+			label: `${id}.ts`,
+			status: 'modified',
+			add: 1,
+			del: 0,
+			decls: []
+		});
+		const edge = (from, to) => ({ from, to, state: 'added' });
+		const s = {
+			nodes: ['d', 'a', 'b', 'c'].map(file),
+			edges: [edge('a', 'b'), edge('a', 'c'), edge('b', 'd'), edge('c', 'd')],
+			omitted: 0
+		};
+		const svg = structureSvg(s);
+		const x = Object.fromEntries(
+			[
+				...svg.matchAll(/<rect class="card" x="(\d+)"[^]*?<text class="ink name"[^>]*>(\w)\.ts</g)
+			].map((m) => [m[2], Number(m[1])])
+		);
+		assert.equal(Object.keys(x).length, 4);
+		assert.ok(x.a < x.b && x.a < x.c, 'a left of b and c');
+		assert.ok(x.b < x.d && x.c < x.d, 'b and c left of d');
+	});
+
 	it('is left out when the PR changes no source it can read', () => {
 		const docs = filesOf(fileDiff('docs/a.md', { hunks: [{ old: 1, new: 1, lines: ['+x'] }] }));
 		assert.deepEqual(diagramsOf({ ...r, files: docs }), []);

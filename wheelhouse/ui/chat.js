@@ -1149,7 +1149,9 @@ export function mountChat(root, host) {
 			return drawFollowups();
 		}
 		const open = readingOrder(S.deck, S.view).filter((x) => !cardOf(x.id)?.decision);
-		const skipped = S.view.minor ? 0 : tierCounts(S.deck).minor;
+		const skipped = S.view.minor
+			? 0
+			: (S.deck?.cards ?? []).filter((c) => tierOfCard(c) === 'minor' && !c.decision).length;
 		const left = unread();
 		if (left.length)
 			await sayText(
