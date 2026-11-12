@@ -8,7 +8,8 @@
  * The stage passes write the cards (`results[stage].cards`). `deckOf` lays
  * them out the way a page reads them: the passage groups (Walkthrough, Key
  * changes, Quality pass, Skim pile, Generated), every card in reading order
- * with the captain's decision on it, the quality pass's checklist of every
+ * with its tier (major, minor or reference point) and the captain's decision
+ * on it, the quality pass's checklist of every
  * concern in the review, and the disagreements the captain asked to remember.
  * A review kept from before cards (quality findings and stop notes only) still
  * reads as cards: `cardsOf` makes them from what those passes said.
@@ -110,6 +111,23 @@ export const verdictOf = (v) => BY_ID.get(/** @type {any} */ (v)) ?? BY_ID.get('
 export const isConcern = (v) => verdictOf(v).family === 'concern';
 export const isPraise = (v) => verdictOf(v).family === 'praise';
 export const isBlocking = (v) => verdictOf(v).blocking;
+
+/**
+ * How much a card matters, which decides when the chat reaches it: the major
+ * issues (a blocking concern) first, then, only when asked, the minor ones (a
+ * concern that doesn't block). A card with no concern at all (praise, an
+ * explanation) is only a reference point, hidden unless asked for. A
+ * secondary verdict counts as much as the main one.
+ */
+export const TIERS = /** @type {const} */ (['major', 'minor', 'reference']);
+
+/** @param {{ verdict: string; secondary?: string | null }} card @returns {'major' | 'minor' | 'reference'} */
+export function tierOf(card) {
+	const vs = [card.verdict, card.secondary].filter(Boolean);
+	if (vs.some(isBlocking)) return 'major';
+	if (vs.some(isConcern)) return 'minor';
+	return 'reference';
+}
 
 /** The groups of the passage, in reading order. */
 export const GROUPS = /** @type {const} */ ([
@@ -246,11 +264,13 @@ export function deckOf(review) {
 		const stage = stages.find((s) => s.id === c.stage);
 		const group = stage ? groupOfKind[stage.kind] : 'generated';
 		groupOf.set(c.id, group);
-		return { ...c, group, decision: decisions[c.id] ?? null };
+		return { ...c, group, tier: tierOf(c), decision: decisions[c.id] ?? null };
 	});
 	const ids = (pred) => cards.filter(pred).map((c) => c.id);
 	const counts = Object.fromEntries(VERDICT_IDS.map((v) => [v, 0]));
 	for (const c of cards) counts[c.verdict]++;
+	const tiers = Object.fromEntries(TIERS.map((t) => [t, 0]));
+	for (const c of cards) tiers[c.tier]++;
 	const asks = (r.results?.walkthrough?.asks ?? []).map((text, i) => ({
 		n: i + 1,
 		text,
@@ -271,14 +291,19 @@ export function deckOf(review) {
 		{
 			...GROUPS[1],
 			stages: stops.map((s) => s.id),
-			stops: stops.map((s) => ({
-				stage: s.id,
-				title: s.title,
-				why: s.why ?? '',
-				files: s.files,
-				state: state(s.id),
-				cards: ids((c) => c.stage === s.id)
-			})),
+			stops: stops.map((s) => {
+				const own = cards.filter((c) => c.stage === s.id);
+				return {
+					stage: s.id,
+					title: s.title,
+					why: s.why ?? '',
+					files: s.files,
+					state: state(s.id),
+					cards: own.map((c) => c.id),
+					// Its most serious card's tier: a stop with nothing to look at is only a reference point.
+					tier: TIERS.find((t) => own.some((c) => c.tier === t)) ?? 'reference'
+				};
+			}),
 			state: groupState(stops.map((s) => state(s.id))),
 			cards: ids((c) => groupOf.get(c.id) === 'key')
 		},
@@ -326,6 +351,7 @@ export function deckOf(review) {
 		groups,
 		cards,
 		counts,
+		tiers,
 		remember: remembered(r, cards)
 	};
 }

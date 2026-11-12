@@ -348,6 +348,78 @@ export const CHAT_STYLE = `${TOKENS}
 .cstate {
 	color: var(--rv-brass);
 }
+.cview {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 5px;
+	padding: 2px 8px 10px;
+	margin: 0 0 6px;
+	border-bottom: 1px solid var(--rv-hair);
+}
+.cview-l {
+	font-size: 12px;
+	color: var(--rv-muted);
+	margin-right: 2px;
+}
+.ctoggle {
+	border: 1px solid var(--rv-rule);
+	background: none;
+	border-radius: 999px;
+	padding: 2px 9px;
+	font-size: 12px;
+	color: var(--rv-muted);
+}
+.ctoggle b {
+	font-weight: 600;
+	margin-left: 2px;
+}
+.ctoggle.on {
+	background: var(--rv-card);
+	border-color: var(--rv-ink);
+	color: var(--rv-ink);
+}
+.ctoggle:disabled {
+	cursor: default;
+	opacity: 1;
+}
+.ctoggle:not(:disabled):hover {
+	border-color: var(--rv-sea);
+}
+.chidden {
+	margin: 2px 0 4px 42px;
+	font-size: 12px;
+	color: var(--rv-muted);
+	font-style: italic;
+}
+.cdiagram {
+	margin: 10px 0 6px;
+	border: 1px solid var(--rv-hair);
+	border-radius: 10px;
+	background: var(--rv-paper);
+	overflow: hidden;
+}
+.cdiagram-box {
+	overflow: auto;
+	max-height: 560px;
+}
+.cdiagram img {
+	display: block;
+	width: 100%;
+	height: auto;
+	cursor: zoom-in;
+}
+.cdiagram.full img {
+	width: auto;
+	max-width: none;
+	cursor: zoom-out;
+}
+.cdiagram figcaption {
+	font-size: 12.5px;
+	color: var(--rv-muted);
+	padding: 6px 10px 8px;
+	border-top: 1px solid var(--rv-hair);
+}
 .crows {
 	list-style: none;
 	margin: 0 0 4px;
@@ -1124,6 +1196,18 @@ export const CHAT_STYLE = `${TOKENS}
 	align-items: baseline;
 	margin: 3px 0;
 	font-size: 14px;
+}
+.cattach {
+	display: block;
+	margin: 12px 0 0;
+}
+.cattach input {
+	margin-right: 6px;
+}
+.cattach .cdim {
+	display: block;
+	margin: 2px 0 0 22px;
+	font-size: 12.5px;
 }
 .crow {
 	display: flex;

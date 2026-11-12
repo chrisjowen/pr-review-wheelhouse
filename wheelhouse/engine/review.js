@@ -22,6 +22,7 @@
  */
 
 import { kindOf } from './classify.js';
+import { diagramsOf } from './diagram.js';
 import { excerpt, parseDiff } from './diff.js';
 import {
 	changeMessages,
@@ -96,6 +97,8 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 								text: m.text || 'The engine stopped before I answered.'
 							});
 				r.cardDecisions ??= {};
+				// A review kept from before diagrams draws them from its diff, as a new one does.
+				r.diagrams ??= diagramsOf(r);
 				live.set(id, r);
 			}
 		}
@@ -463,6 +466,7 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				cardDecisions: {},
 				reviewed: [],
 				posted: null,
+				diagrams: diagramsOf({ pr, files }),
 				previous: kept ? { headSha: kept.pr.headSha, at: kept.updatedAt } : null
 			};
 			live.set(id, r);
@@ -640,9 +644,12 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 
 		/**
 		 * Posts the review to GitHub. Only the captain's click on "Post to GitHub"
-		 * reaches this, with `confirm: true` and the draft they saw.
+		 * reaches this, with `confirm: true` and the draft they saw. With
+		 * `diagrams`, the review's diagrams go up first, committed to the
+		 * repository's diagram branch (`github.attach`), and the review shows
+		 * them; if they can't go up, the review still posts, and says why.
 		 */
-		async post(id, { event, body, comments, confirm }) {
+		async post(id, { event, body, comments, confirm, diagrams = false }) {
 			const r = get(id);
 			if (confirm !== true) throw new ReviewError('Posting needs the captain’s confirmation.');
 			if (!VERDICTS.includes(event))
@@ -655,6 +662,28 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 					? comments.filter(isComment).slice(0, 100)
 					: draft.comments
 			};
+			const pictures = [];
+			let unattached = null;
+			if (diagrams === true && r.diagrams?.length) {
+				try {
+					if (!github.attach) throw new Error('this host can’t attach files to a pull request');
+					const urls = await github.attach(
+						r.pr,
+						r.diagrams.map((d) => ({ path: d.file, content: d.svg }))
+					);
+					r.diagrams.forEach((d, i) => urls[i] && pictures.push({ title: d.title, url: urls[i] }));
+					const alt = (d) => d.alt.replace(/[[\]\n]/g, ' ');
+					sent.body += r.diagrams
+						.map((d, i) =>
+							urls[i]
+								? `\n\n**${d.title}** (worked out from the diff: each changed file with what it adds, changes or removes, and the imports it adds or removes)\n\n![${alt(d)}](${urls[i]})`
+								: ''
+						)
+						.join('');
+				} catch (e) {
+					unattached = `The diagram couldn’t be attached: ${String(e.message).replace(/\.$/, '')}.`;
+				}
+			}
 			let done;
 			try {
 				done = await github.post(r.pr, sent);
@@ -666,7 +695,11 @@ export function createReviews({ github, store, model, now = Date.now, log = () =
 				at: now(),
 				url: done.url,
 				event: VERDICTS.includes(done.event) ? done.event : event,
-				note: typeof done.note === 'string' && done.note ? done.note : null
+				note:
+					[typeof done.note === 'string' && done.note ? done.note : null, unattached]
+						.filter(Boolean)
+						.join(' ') || null,
+				diagrams: pictures
 			};
 			save(r);
 			return r;

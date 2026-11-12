@@ -97,6 +97,9 @@ export function checkState(c) {
 	return 'pending';
 }
 
+/** The branch a review's diagrams are committed to, apart from every PR's own. */
+export const DIAGRAM_BRANCH = 'pr-review-diagrams';
+
 const OWN_PR_NOTE =
 	'GitHub doesn’t let you approve or request changes on your own pull request, so this was posted as a comment.';
 const FIELDS =
@@ -203,6 +206,86 @@ export function createGitHub(run) {
 				// posted, but gh's answer was not JSON
 			}
 			return { url: out.html_url ?? pr.url, id: out.id ?? null, event: ev, note };
+		},
+
+		/**
+		 * Files for a review to show, such as its diagrams, committed with the
+		 * Git data API to the repository's own `pr-review-diagrams` branch, a
+		 * branch of their own that nothing merges, so the PR's branch is never
+		 * touched and GitHub shows them to whoever can see the repository.
+		 * Answers each file's address at that commit. Only posting a review,
+		 * on the captain's click, reaches this.
+		 *
+		 * @param {{ owner: string; repo: string; number: number; headSha?: string }} pr
+		 * @param {{ path: string; content: string }[]} files
+		 */
+		async attach(pr, files) {
+			const repo = `repos/${pr.owner}/${pr.repo}`;
+			const send = async (method, path, body, what) => {
+				const r = await run(['api', '-X', method, `${repo}/${path}`, '--input', '-'], {
+					input: JSON.stringify(body)
+				});
+				if (!r.ok) throw fail(what, r);
+				try {
+					return JSON.parse(r.stdout);
+				} catch {
+					throw new GitHubError('gh answered with something that isn’t JSON.');
+				}
+			};
+			const ref = await run(['api', `${repo}/git/ref/heads/${DIAGRAM_BRANCH}`]);
+			if (!ref.ok && !/not found|404/i.test(ref.stderr))
+				throw fail('The diagram branch couldn’t be read', ref);
+			let tip = null;
+			let tree = null;
+			if (ref.ok) {
+				tip = JSON.parse(ref.stdout).object?.sha ?? null;
+				const commit = await run(['api', `${repo}/git/commits/${tip}`]);
+				if (!commit.ok) throw fail('The diagram branch couldn’t be read', commit);
+				tree = JSON.parse(commit.stdout).tree?.sha ?? null;
+			}
+			const made = await send(
+				'POST',
+				'git/trees',
+				{
+					...(tree ? { base_tree: tree } : {}),
+					tree: files.map((f) => ({
+						path: f.path,
+						mode: '100644',
+						type: 'blob',
+						content: f.content
+					}))
+				},
+				'The diagram couldn’t be stored'
+			);
+			const sha = String(pr.headSha ?? '').slice(0, 7);
+			const commit = await send(
+				'POST',
+				'git/commits',
+				{
+					message: `Diagrams for #${pr.number}${sha ? ` at ${sha}` : ''}, from the PR review`,
+					tree: made.sha,
+					parents: tip ? [tip] : []
+				},
+				'The diagram couldn’t be committed'
+			);
+			if (tip)
+				await send(
+					'PATCH',
+					`git/refs/heads/${DIAGRAM_BRANCH}`,
+					{ sha: commit.sha, force: false },
+					'The diagram branch couldn’t be moved'
+				);
+			else
+				await send(
+					'POST',
+					'git/refs',
+					{ ref: `refs/heads/${DIAGRAM_BRANCH}`, sha: commit.sha },
+					'The diagram branch couldn’t be made'
+				);
+			return files.map(
+				(f) =>
+					`https://github.com/${pr.owner}/${pr.repo}/raw/${commit.sha}/${f.path.split('/').map(encodeURIComponent).join('/')}`
+			);
 		},
 
 		/** Who gh is signed in as, or null when it can't say. */
