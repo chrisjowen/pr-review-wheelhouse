@@ -245,22 +245,23 @@ export class PrReviewTab extends HTMLElement {
 
 	/**
 	 * Shows a review the engine already keeps, as kept, without reading the PR
-	 * or running a pass; any other PR waits in the URL box for the captain's click,
-	 * unless it came from a ?pr= link and the host turns on `autoOpen`.
+	 * or running a pass. A ?pr= link is a click on Review (Wheelhouse's Review
+	 * on a chat card), so a PR the engine doesn't keep opens straight away,
+	 * unless the host turns `autoOpen` off; the review open last here, if the
+	 * engine no longer keeps it, waits in the URL box for the captain's click.
 	 */
 	async reopen({ url, linked }) {
 		const kept = this.s.recent.find((x) => x.url === url);
 		if (kept) this.show({ id: kept.id, url: kept.url });
-		// A host that is itself a click on Review opens its ?pr= link straight away.
 		else if (linked && this.feature('autoOpen')) await this.open(url);
 		else this.s.typed = url;
 		this.render();
 	}
 
-	/** What the host lets the tab do; Wheelhouse sets none of these, so the tab there is as it always was. */
+	/** What the host lets the tab do; Wheelhouse sets none of these, so it gets the defaults. */
 	feature(name) {
 		const f = this.host?.features ?? {};
-		const defaults = { post: true, firstmate: true, autoOpen: false };
+		const defaults = { post: true, firstmate: true, autoOpen: true };
 		return name in f ? !!f[name] : defaults[name];
 	}
 

@@ -413,6 +413,90 @@ describe('posting to GitHub', () => {
 		assert.match(r.posted.note, /your own pull request, so this was posted as a comment\./);
 	});
 
+	it('keeps the PR’s structure diagram, worked out from the diff', async () => {
+		const { reviews } = setup();
+		const r = await reviews.open(PR_URL);
+		assert.deepEqual(
+			r.diagrams.map((d) => d.file),
+			[`pr-48/${'a'.repeat(7)}-structure.svg`]
+		);
+		assert.match(r.diagrams[0].svg, /^<svg /);
+		await reviews.settled();
+	});
+
+	it('puts the diagram on the diagram branch first, and shows it in the review, only when asked', async () => {
+		const { reviews, gh } = setup();
+		await reviews.open(PR_URL);
+		await reviews.settled();
+		const r = await reviews.post(ID, {
+			event: 'COMMENT',
+			body: 'Looks fine.',
+			confirm: true,
+			diagrams: true
+		});
+		const api = gh.calls.filter((c) => c.argv[0] === 'api');
+		assert.deepEqual(
+			api.map(
+				(c) =>
+					`${c.argv.includes('-X') ? c.argv[c.argv.indexOf('-X') + 1] : 'GET'} ${c.argv.find((a) => a.startsWith('repos/'))}`
+			),
+			[
+				'GET repos/acme/lumen/git/ref/heads/pr-review-diagrams',
+				'POST repos/acme/lumen/git/trees',
+				'POST repos/acme/lumen/git/commits',
+				'POST repos/acme/lumen/git/refs',
+				'POST repos/acme/lumen/pulls/48/reviews'
+			],
+			'a new branch of its own; the PR’s branch is never touched'
+		);
+		const tree = JSON.parse(api[1].input);
+		assert.equal(tree.base_tree, undefined);
+		assert.deepEqual(
+			tree.tree.map((t) => [t.path, t.mode, t.type]),
+			[[`pr-48/${'a'.repeat(7)}-structure.svg`, '100644', 'blob']]
+		);
+		assert.match(tree.tree[0].content, /^<svg /);
+		assert.deepEqual(JSON.parse(api[2].input).parents, []);
+		assert.deepEqual(JSON.parse(api[3].input), {
+			ref: 'refs/heads/pr-review-diagrams',
+			sha: 'c0ffee7'
+		});
+		const url = `https://github.com/acme/lumen/raw/c0ffee7/pr-48/${'a'.repeat(7)}-structure.svg`;
+		const sent = JSON.parse(api[4].input);
+		assert.ok(sent.body.startsWith('Looks fine.\n\n**How the change fits together**'));
+		assert.ok(sent.body.endsWith(`](${url})`));
+		assert.deepEqual(r.posted.diagrams, [{ title: 'How the change fits together', url }]);
+		assert.equal(r.posted.note, null);
+	});
+
+	it('adds to the diagram branch when it is there already', async () => {
+		const { reviews, gh } = setup({ gh: fakeGh({ branch: 'beef001' }) });
+		await reviews.open(PR_URL);
+		await reviews.settled();
+		await reviews.post(ID, { event: 'COMMENT', confirm: true, diagrams: true });
+		const api = gh.calls.filter((c) => c.argv[0] === 'api');
+		const at = (path) => api.find((c) => c.argv.some((a) => a.endsWith(path)));
+		assert.equal(JSON.parse(at('/git/trees').input).base_tree, 'basetree1');
+		assert.deepEqual(JSON.parse(at('/git/commits').input).parents, ['beef001']);
+		const move = at('/git/refs/heads/pr-review-diagrams');
+		assert.ok(move.argv.includes('PATCH'));
+		assert.deepEqual(JSON.parse(move.input), { sha: 'c0ffee7', force: false });
+	});
+
+	it('still posts when the diagram can’t go up, and says why', async () => {
+		const { reviews, gh } = setup({ gh: fakeGh({ git: false }) });
+		await reviews.open(PR_URL);
+		await reviews.settled();
+		const r = await reviews.post(ID, { event: 'COMMENT', confirm: true, diagrams: true });
+		const sent = JSON.parse(gh.calls.find((c) => c.argv.some((a) => a.endsWith('/reviews'))).input);
+		assert.doesNotMatch(sent.body, /fits together/);
+		assert.match(
+			r.posted.note,
+			/^The diagram couldn’t be attached: The diagram couldn’t be stored/
+		);
+		assert.deepEqual(r.posted.diagrams, []);
+	});
+
 	it('explains GitHub refusing a review for any other reason', async () => {
 		const gh = fakeGh({
 			onPost: () => ({ ok: false, stdout: '', stderr: 'HTTP 422: Validation Failed' })

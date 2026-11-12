@@ -13,12 +13,13 @@ import {
 	filesWithCards,
 	fuzzy,
 	markdown,
+	ISSUES_ONLY,
 	nextUndecided,
-	offerContext,
 	parseLine,
 	partKind,
 	partsOf,
 	readingOrder,
+	tierCounts,
 	verdictTable
 } from '../wheelhouse/ui/chat-core.js';
 
@@ -91,54 +92,67 @@ describe('what a card says in the chat', () => {
 });
 
 describe('the order the chat walks the review in', () => {
-	it('reads every card once, key changes by stop, then the quality pass, then the skim pile with the generated files last', () => {
-		const order = readingOrder(deck);
-		assert.equal(order.length, deck.cards.length);
-		assert.equal(new Set(order.map((x) => x.id)).size, deck.cards.length);
-		assert.deepEqual([...new Set(order.map((x) => x.group))], ['key', 'quality', 'skim']);
-		assert.equal(order.at(-1).id, 'generated:c1');
-		assert.equal(order.at(-1).group, 'skim');
+	const tierOf = (id) => deck.cards.find((c) => c.id === id).tier;
+
+	it('files each card as a major issue, a minor one or a reference point, by its worst verdict', () => {
+		const tiers = Object.fromEntries(deck.cards.map((c) => [c.id, c.tier]));
+		assert.equal(tiers['stop-1:c4'], 'major', 'a possible security issue');
+		assert.equal(tiers['skim:c3'], 'major', 'an explanation that is also not well tested');
+		assert.equal(tiers['quality:c1'], 'minor', 'over-complex blocks nothing');
+		assert.equal(tiers['stop-1:c1'], 'reference', 'looks good');
+		assert.equal(tiers['generated:c1'], 'reference');
+		assert.deepEqual(tierCounts(deck), { major: 5, minor: 6, reference: 9 });
 		assert.deepEqual(
-			[...new Set(order.filter((x) => x.group === 'key').map((x) => x.section))],
-			['stop-1', 'stop-2']
+			deck.groups[1].stops.map((s) => s.tier),
+			['major', 'minor'],
+			'a stop is as serious as its worst card'
 		);
 	});
 
-	it('goes to the next undecided card, wrapping round, and stops when all are decided', () => {
-		const order = readingOrder(deck).map((x) => x.id);
-		assert.equal(nextUndecided(deck, null), order[0]);
+	it('walks only the major issues at first, most serious first, a low-severity security issue last', () => {
+		const order = readingOrder(deck, ISSUES_ONLY);
+		assert.deepEqual(
+			order.map((x) => x.id),
+			['stop-1:c3', 'stop-1:c2', 'skim:c1', 'skim:c3', 'stop-1:c4']
+		);
+		assert.ok(order.every((x) => x.tier === 'major'));
+		assert.equal(order[0].section, 'stop-1');
+		assert.equal(order[2].group, 'skim');
+	});
+
+	it('lets the minor ones in after the major ones, and the reference points last, in the passage’s order', () => {
+		const minor = readingOrder(deck, { minor: true, reference: false });
+		assert.deepEqual(
+			minor.map((x) => x.tier),
+			[...Array(5).fill('major'), ...Array(6).fill('minor')]
+		);
+		assert.deepEqual(
+			minor.slice(5).map((x) => x.id),
+			['quality:c1', 'quality:c2', 'stop-1:c5', 'stop-2:c3', 'stop-2:c4', 'quality:c3'],
+			'over-complex before code smells'
+		);
+		const all = readingOrder(deck);
+		assert.equal(all.length, deck.cards.length);
+		assert.equal(new Set(all.map((x) => x.id)).size, deck.cards.length);
+		assert.deepEqual(
+			all.filter((x) => x.tier === 'reference').map((x) => x.id),
+			deck.cards.filter((c) => c.tier === 'reference').map((c) => c.id)
+		);
+		assert.ok(all.slice(0, 11).every((x) => tierOf(x.id) !== 'reference'));
+	});
+
+	it('goes to the next undecided card in view, wrapping round, and stops when all are decided', () => {
+		const order = readingOrder(deck, ISSUES_ONLY).map((x) => x.id);
+		assert.equal(nextUndecided(deck, null, ISSUES_ONLY), order[0]);
 		const some = withDecisions([order[1], order[2]]);
-		assert.equal(nextUndecided(some, order[0]), order[3]);
-		assert.equal(nextUndecided(withDecisions(order.slice(1)), order[5]), order[0]);
-		assert.equal(nextUndecided(withDecisions(order), order[0]), null);
-	});
-});
-
-describe('when to offer context', () => {
-	const small = { ...review, files: review.files.slice(0, 2) };
-	it('offers it on a repo the reviewer hasn’t reviewed here before', () => {
-		assert.equal(offerContext(small, []).offer, true);
-		assert.equal(
-			offerContext(small, [{ id: small.id, repo: 'chrisjowen/docket', decided: 3 }]).offer,
-			true
+		assert.equal(nextUndecided(some, order[0], ISSUES_ONLY), order[3]);
+		assert.equal(nextUndecided(withDecisions(order.slice(1)), order[4], ISSUES_ONLY), order[0]);
+		assert.equal(nextUndecided(withDecisions(order), order[0], ISSUES_ONLY), null);
+		assert.notEqual(
+			nextUndecided(withDecisions(order), order[0]),
+			null,
+			'the minor ones and reference points are still open'
 		);
-	});
-	it('doesn’t count a review only opened, or an untouched demo, as reviewing the repo', () => {
-		const opened = [
-			{ id: 'chrisjowen__docket__47', repo: 'chrisjowen/docket', decided: 0, posted: null }
-		];
-		assert.equal(offerContext(small, opened).offer, true);
-	});
-	it('goes straight in on a familiar repo, unless the PR is large', () => {
-		const posted = [
-			{ id: 'chrisjowen__docket__46', repo: 'chrisjowen/docket', decided: 0, posted: { url: 'x' } }
-		];
-		assert.equal(offerContext(small, posted).offer, false);
-		const others = [{ id: 'chrisjowen__docket__47', repo: 'chrisjowen/docket', decided: 2 }];
-		assert.equal(offerContext(small, others).offer, false);
-		const big = offerContext(review, others);
-		assert.equal(big.large, true, '17 files, over a thousand lines');
-		assert.equal(big.offer, true);
 	});
 });
 
@@ -148,6 +162,9 @@ describe('what a typed line means', () => {
 			next: 'next',
 			'Go on': 'next',
 			back: 'back',
+			minor: 'minor',
+			'show the minor issues': 'minor',
+			'the small things': 'minor',
 			accept: 'accept',
 			'Accept.': 'accept',
 			finish: 'finish',

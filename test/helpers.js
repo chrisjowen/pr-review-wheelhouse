@@ -150,7 +150,9 @@ export function sampleView(over = {}) {
  * A fake `gh`: answers `pr view` and `pr diff` for the made-up PR, who it is
  * signed in as (`login`), a file at a commit (`files`, by path), the
  * repository and its README, records every call, and answers posting a
- * review with `onPost`.
+ * review with `onPost`. The Git data API stores files on a branch: `branch`
+ * is the diagram branch's tip (null for none yet), and `git: false` refuses
+ * every write, as for a reviewer who can't push.
  */
 export function fakeGh({
 	view = sampleView(),
@@ -158,7 +160,9 @@ export function fakeGh({
 	onPost,
 	login = 'reviewer',
 	files = {},
-	readme = '# Lumen\n\nA board for graph search.'
+	readme = '# Lumen\n\nA board for graph search.',
+	branch = null,
+	git = true
 } = {}) {
 	const calls = [];
 	const missing = { ok: false, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
@@ -168,6 +172,19 @@ export function fakeGh({
 			return { ok: true, stdout: JSON.stringify(view), stderr: '' };
 		if (argv[0] === 'pr' && argv[1] === 'diff') return { ok: true, stdout: diff, stderr: '' };
 		if (argv[0] !== 'api') return { ok: false, stdout: '', stderr: 'unknown command' };
+		const target = argv.find((a) => a.startsWith('repos/')) ?? '';
+		if (/^repos\/[^/]+\/[^/]+\/git\//.test(target)) {
+			const json = (v) => ({ ok: true, stdout: JSON.stringify(v), stderr: '' });
+			const write = argv.includes('POST') || argv.includes('PATCH');
+			if (write && !git) return missing;
+			if (/\/git\/ref\/heads\//.test(target))
+				return branch ? json({ object: { sha: branch } }) : missing;
+			if (/\/git\/commits\/\w+$/.test(target)) return json({ tree: { sha: 'basetree1' } });
+			if (target.endsWith('/git/trees')) return json({ sha: 'tree1' });
+			if (target.endsWith('/git/commits')) return json({ sha: 'c0ffee7' });
+			if (/\/git\/refs/.test(target)) return json({ ref: 'refs/heads/pr-review-diagrams' });
+			return missing;
+		}
 		if (argv.includes('POST'))
 			return onPost
 				? onPost(JSON.parse(o.input))

@@ -1,9 +1,13 @@
 /**
  * The guided review as a chat, shared by every host: the Wheelhouse plugin's
- * tab and the PR review web app. The conversation is the review: an overview
- * of the PR, context on the project or the story when it helps, then one card
- * per change, each saying what the reviewer likes, what needs work and what is
- * serious, with its code, Accept / Disagree / Comment, and follow-up questions.
+ * tab and the PR review web app. The conversation is the review, from the
+ * first message: an overview of the PR (with the diagram of how the change
+ * fits together), then one card per major issue, most serious first, then the
+ * minor ones only if the captain asks; praise and explanations are reference
+ * points the navigator shows on a toggle. Each card says what the reviewer
+ * likes, what needs work and what is serious, with its code, Accept /
+ * Disagree / Comment, and follow-up questions. Context on the project or the
+ * story is a button away.
  * Anything typed is a question for the reviewer (the engine's chat, in the
  * thread of the card being discussed) or a command ("next", "finish").
  *
@@ -32,7 +36,9 @@ import {
 } from './draft.js';
 import { CHAT_STYLE } from './chat-styles.js';
 import {
+	ISSUES_ONLY,
 	PART_LABEL,
+	TIER_LABEL,
 	codeOf,
 	esc,
 	filesWithCards,
@@ -40,12 +46,13 @@ import {
 	inline,
 	markdown,
 	nextUndecided,
-	offerContext,
 	parseLine,
 	partKind,
 	partsOf,
 	readingOrder,
 	takeText,
+	tierCounts,
+	tierOfCard,
 	verdictTable
 } from './chat-core.js';
 
@@ -208,14 +215,14 @@ export function mountChat(root, host) {
 		review: null,
 		deck: null,
 		vt: verdictTable([]),
-		phase: 'loading', // loading → context → review → finish → posted
+		phase: 'loading', // loading → review → finish → posted
 		current: null, // the card the conversation is about
+		view: { ...ISSUES_ONLY }, // which tiers the conversation walks: the major issues, and more once asked
 		shown: new Set(), // cards posted into the chat
 		entered: new Set(), // sections already introduced
 		pending: null, // { type: 'disagree' | 'comment' | 'remember', card, reason? }
 		waiting: null, // a stage the conversation waits on for its cards
 		answers: [], // { thread, index, el } replies being written
-		others: [],
 		files: [],
 		viewed: new Set(),
 		drawer: null,
@@ -226,8 +233,21 @@ export function mountChat(root, host) {
 	};
 	const cardOf = (id) => S.deck?.cards.find((c) => c.id === id) ?? null;
 	const stageOf = (id) => S.review?.stages.find((s) => s.id === id) ?? null;
+	/** A card's place among every card, most serious first, so its number never changes with the view. */
 	const numberOf = (id) => readingOrder(S.deck).findIndex((x) => x.id === id) + 1;
-	const total = () => readingOrder(S.deck).length;
+	/** How many cards the conversation walks now. */
+	const total = () => readingOrder(S.deck, S.view).length;
+	/** Whether the conversation walks a card now. */
+	const inView = (id) => {
+		const t = tierOfCard(cardOf(id));
+		return t === 'major' || S.view[t];
+	};
+	/** A card as its tier names it: "Major issue 2 of 3". */
+	function tierPlace(id) {
+		const t = tierOfCard(cardOf(id));
+		const same = readingOrder(S.deck).filter((x) => x.tier === t);
+		return `${TIER_LABEL[t][0]} ${same.findIndex((x) => x.id === id) + 1} of ${same.length}`;
+	}
 	const base = (p) =>
 		String(p ?? '')
 			.split('/')
@@ -466,7 +486,7 @@ export function mountChat(root, host) {
 				? `<ul class="cgen">${(S.review.plan?.generated ?? []).map((p) => `<li><bdi>${esc(p)}</bdi></li>`).join('')}</ul>`
 				: '';
 		return `<div class="ccard change" data-card="${esc(c.id)}" style="--v: var(--v-${c.verdict})">
-		<div class="chead"><span>Change ${numberOf(c.id)} of ${total()} · ${esc(sectionTitle(c))}</span><span class="cwhere">${esc(whereOf(c))}</span></div>
+		<div class="chead"><span>${esc(tierPlace(c.id))} · ${esc(sectionTitle(c))}</span><span class="cwhere">${esc(whereOf(c))}</span></div>
 		<div class="chips">${chip(c.verdict, 'main', c.severity)}${c.secondary ? chip(c.secondary, 'second') : ''}</div>
 		<h3>${inline(c.title)}</h3>
 		${c.take ? `<div class="ctake">${markdown(c.take)}</div>` : ''}
@@ -537,6 +557,7 @@ export function mountChat(root, host) {
 		<div class="cmeta"><span>${esc(pr.owner)}/${esc(pr.repo)}#${pr.number}${pr.author ? ` by ${esc(pr.author)}` : ''}</span><span>${r.files.length} files</span><span><span class="a">+${add.toLocaleString()}</span> <span class="d">−${del.toLocaleString()}</span></span>${pr.commits?.length ? `<span>${pr.commits.length} commits</span>` : ''}${checks.length ? `<span>${failing ? `${failing} of ${checks.length} checks failing` : `${checks.length === 1 ? '1 check' : `${checks.length} checks`} passing`}</span>` : ''}</div>
 		${w.headline ? `<p class="cgist">${inline(w.headline)}</p>` : ''}
 		${w.what ? markdown(w.what) : ''}
+		${diagramsHtml()}
 		${
 			serious.length
 				? `<p class="csub">Needs your attention</p><ul class="cchecks">${serious
@@ -550,8 +571,21 @@ export function mountChat(root, host) {
 		}
 		${asks.length ? `<p class="csub">What was asked</p><ul class="cchecks">${asks.map((a) => `<li>${dot(askState(a))}<span>${inline(a.text)}</span><span class="crefs">${a.cards.map(ref).join('')}</span></li>`).join('')}</ul>` : ''}
 		${(w.risks ?? []).length ? `<p class="csub">Risks the description names</p><ul>${w.risks.map((x) => `<li>${inline(x)}</li>`).join('')}</ul>` : ''}
-		${S.deck.cards.length ? `<p class="csub">The shape of it: ${total()} changes</p>${shapeHtml()}${countsHtml()}` : ''}
+		${S.deck.cards.length ? `<p class="csub">The shape of it: ${S.deck.cards.length} changes</p>${shapeHtml()}${countsHtml()}` : ''}
 	</div>`;
+	}
+	/**
+	 * The review's diagrams, worked out from the diff by the engine. Each is an
+	 * image of the engine's own SVG, so nothing in it can run, and it keeps
+	 * the colours it carries for light and dark; a click shows it full size.
+	 */
+	function diagramsHtml() {
+		return (S.review.diagrams ?? [])
+			.map(
+				(d) =>
+					`<p class="csub">${esc(d.title)}</p><figure class="cdiagram" data-diagram><div class="cdiagram-box"><img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(d.svg)}" alt="${esc(d.alt)}" title="Click for full size"></div><figcaption>Worked out from the diff: each changed file with what it adds (+), changes (~) or removes (−), and the imports between them. ${host.github?.post !== false ? 'Posting the review can put it on the pull request.' : ''}</figcaption></figure>`
+			)
+			.join('');
 	}
 	function checklistHtml() {
 		const q = S.deck.groups.find((g) => g.id === 'quality');
@@ -581,9 +615,10 @@ export function mountChat(root, host) {
 			);
 			return;
 		}
-		S.phase = 'context';
+		// Straight into the review: the overview, then the first major issue, with nothing to click between.
+		S.phase = 'review';
 		await say(
-			`<div class="ctext"><p>I’ve read all ${S.review.files.length} files of this pull request. Here’s the overview; then we’ll go through it one change at a time.</p></div>${overviewHtml()}`,
+			`<div class="ctext"><p>I’ve read all ${S.review.files.length} files of this pull request. Here’s the overview; then the major issues, most serious first.</p></div>${overviewHtml()}`,
 			{ pause: 250 }
 		);
 		if (w.take) await sayText(takeText(w.take), { pause: 300 });
@@ -591,34 +626,16 @@ export function mountChat(root, host) {
 		const decided = S.deck.cards.filter((c) => c.decision).length;
 		if (decided) {
 			await sayText(
-				`Welcome back. You’ve decided ${decided} of ${total()} changes, so I’ll pick up at the first one still open. The navigator has the ones you’ve done.`,
+				`Welcome back. You’ve decided ${decided} of ${S.deck.cards.length} changes, so I’ll pick up at the first one still open. The navigator has the ones you’ve done.`,
 				{ pause: 250 }
 			);
 			return startReview();
 		}
-		const offer = offerContext(S.review, S.others);
-		drawFollowups();
-		if (offer.offer) {
-			const why = offer.large
-				? `It’s a big one (${offer.files} files, ${offer.lines.toLocaleString()} lines)`
-				: 'You haven’t reviewed this repo here before';
-			await say(
-				`<div class="ctext"><p>${why}. Before the changes, do you want some context? I can explain <b>the project as a whole</b>, or <b>the story</b> behind this PR: why it exists and what it was asked to do. Or we can go straight in.</p></div>
-			${quick([
-				['The project', 'ctx:project'],
-				['The story', 'ctx:story'],
-				['Both', 'ctx:both'],
-				['Start the review', 'start', true]
-			])}`,
-				{ pause: 300 }
-			);
-		} else {
-			await sayText(
-				'You know this repo, so let’s go straight in. Context on the project or the story is a click away below if you want it.',
-				{ pause: 250 }
-			);
-			await startReview();
-		}
+		await sayText(
+			'The minor issues come after, if you want them, and what’s only worth knowing (praise, explanations) stays in the navigator. Context on the project or the story is a click away below.',
+			{ pause: 200 }
+		);
+		await startReview();
 	}
 
 	async function showContext(kind) {
@@ -636,11 +653,6 @@ export function mountChat(root, host) {
 			}
 		}
 		drawFollowups();
-		if (S.phase === 'context')
-			await say(
-				`<div class="ctext"><p>Ask me anything about it, or let’s start. I’ll go in reading order: the key changes first, then the quality pass, then the skim pile.</p></div>${quick([...(kind === 'project' ? [['The story', 'ctx:story']] : kind === 'story' ? [['The project', 'ctx:project']] : []), ['Start the review', 'start', true]])}`,
-				{ pause: 200 }
-			);
 	}
 	function storyHtml() {
 		const w = S.review.results.walkthrough ?? {};
@@ -671,7 +683,7 @@ export function mountChat(root, host) {
 	async function startReview() {
 		S.phase = 'review';
 		drawFollowups();
-		const first = nextUndecided(S.deck, null);
+		const first = nextUndecided(S.deck, null, S.view);
 		if (first) return showCard(first);
 		return goNext();
 	}
@@ -753,22 +765,64 @@ export function mountChat(root, host) {
 	}
 
 	async function goNext() {
-		const order = readingOrder(S.deck);
+		const order = readingOrder(S.deck, S.view);
+		const open = (x) => !cardOf(x.id)?.decision;
 		const at = order.findIndex((x) => x.id === S.current);
-		const ahead = order.slice(at + 1).find((x) => !cardOf(x.id)?.decision);
+		// The next open card, else one a stage read since that sorts ahead of where the chat is.
+		const ahead =
+			order.slice(at + 1).find(open) ?? order.find((x) => open(x) && !S.shown.has(x.id));
 		if (ahead) return showCard(ahead.id);
-		// Nothing open ahead: wait for a stage still being read, else go back round, else finish.
+		// Nothing open ahead: wait for a stage still being read, else go back round, else offer more.
 		const stage = nextToRead();
 		if (stage) return waitFor(stage);
-		const back = nextUndecided(S.deck, S.current);
+		const back = nextUndecided(S.deck, S.current, S.view);
 		if (back) {
 			await sayText(
-				`That’s the end of the passage, but ${order.filter((x) => !cardOf(x.id)?.decision).length} changes are still open. Back to the first one.`,
+				`That’s the end of them, but ${order.filter(open).length} changes are still open. Back to the first one.`,
 				{ pause: 250 }
 			);
 			return showCard(back, { jumped: true });
 		}
+		return offerMore();
+	}
+
+	/** Every major issue is decided: offer the minor ones, an explicit step, else finish. */
+	async function offerMore() {
+		const n = tierCounts(S.deck);
+		const majors = n.major
+			? `That’s ${n.major === 1 ? 'the one major issue' : `all ${n.major} major issues`}.`
+			: 'I found no major issues.';
+		if (!S.view.minor && n.minor) {
+			await say(
+				`<div class="ctext"><p>${majors} There ${n.minor === 1 ? 'is 1 minor one' : `are ${n.minor} minor ones`} too (code smells, over-complex code), none of them blocking. Go through ${n.minor === 1 ? 'it' : 'them'}, or finish?</p></div>${quick(
+					[
+						[`Show the minor issues (${n.minor})`, 'more:minor', true],
+						['Finish review', 'finish']
+					]
+				)}`,
+				{ pause: 250 }
+			);
+			return drawFollowups();
+		}
+		if (!n.major && !n.minor)
+			await sayText(
+				`I found no issues to raise, major or minor.${n.reference ? ` The navigator has ${n.reference === 1 ? 'the one reference point' : `${n.reference} reference points`} (what I liked, and what’s worth knowing) if you want them.` : ''}`,
+				{ pause: 200 }
+			);
+		else if (!n.minor) await sayText(`${majors} There are no minor ones.`, { pause: 200 });
 		return finish();
+	}
+
+	/** Lets a tier into the conversation (or takes it out), from the navigator's toggles or the minor-issues step. */
+	function setView(tier, on) {
+		S.view = { ...S.view, [tier]: on };
+		drawNav();
+		updateProgress();
+		drawFollowups();
+	}
+	async function showMinor() {
+		setView('minor', true);
+		return goNext();
 	}
 
 	async function waitFor(stage) {
@@ -980,24 +1034,17 @@ export function mountChat(root, host) {
 			await me(line.text, 'comment');
 			return decide(p.card, { decision: 'comment', text: line.text });
 		}
-		if (S.phase === 'context') {
-			const t = line.text.toLowerCase();
-			if (/\bboth\b/.test(t)) return me(line.text).then(() => showContext('both'));
-			if (/project|repo|codebase|big picture/.test(t) && t.split(/\s+/).length <= 6)
-				return me(line.text).then(() => showContext('project'));
-			if (/story|background|why this|history/.test(t) && t.split(/\s+/).length <= 6)
-				return me(line.text).then(() => showContext('story'));
-			if (/^(no|nope|skip|start|go|let'?s go|begin|ready|straight in)\b/.test(t))
-				return me(line.text).then(startReview);
-		}
 		const cur = S.current;
 		switch (line.type) {
 			case 'next':
 				await me(line.text);
-				return S.phase === 'context' ? startReview() : goNext();
+				return goNext();
+			case 'minor':
+				await me(line.text);
+				return showMinor();
 			case 'back': {
 				await me(line.text);
-				const order = readingOrder(S.deck);
+				const order = inView(cur) ? readingOrder(S.deck, S.view) : readingOrder(S.deck);
 				const i = order.findIndex((x) => x.id === cur);
 				return i > 0
 					? showCard(order[i - 1].id, { jumped: true })
@@ -1101,7 +1148,10 @@ export function mountChat(root, host) {
 			);
 			return drawFollowups();
 		}
-		const open = readingOrder(S.deck).filter((x) => !cardOf(x.id)?.decision);
+		const open = readingOrder(S.deck, S.view).filter((x) => !cardOf(x.id)?.decision);
+		const skipped = S.view.minor
+			? 0
+			: (S.deck?.cards ?? []).filter((c) => tierOfCard(c) === 'minor' && !c.decision).length;
 		const left = unread();
 		if (left.length)
 			await sayText(
@@ -1117,6 +1167,11 @@ export function mountChat(root, host) {
 						' '
 					)}${open.length > 6 ? ` and ${open.length - 6} more in the navigator.` : ''}</p></div>`,
 				{ pause: 200 }
+			);
+		if (skipped)
+			await sayText(
+				`You didn’t go through the ${skipped === 1 ? 'minor issue' : `${skipped} minor issues`}, so ${skipped === 1 ? 'it stays' : 'they stay'} out of the review.`,
+				{ pause: 150 }
 			);
 		const rec = suggestVerdict(S.review);
 		const draft = draftReview(S.review, { event: rec });
@@ -1150,6 +1205,7 @@ export function mountChat(root, host) {
 			<label class="sr" for="reviewBody">The review’s text</label>
 			<textarea class="cbodytext" id="reviewBody">${esc(draft.body)}</textarea>
 			<p class="cdim small" id="commentCount">${draft.comments.length === 1 ? '1 inline comment goes' : `${draft.comments.length} inline comments go`} with it, on the lines they’re about.${ownNote && posts ? ' GitHub won’t let you approve or request changes on your own PR, so there it goes up as a comment.' : ''}</p>
+			${posts && S.review.diagrams?.length ? `<label class="copt cattach"><input type="checkbox" name="diagrams" checked> Put the diagram on the pull request, in the review. <span class="cdim">It’s committed to the <code>pr-review-diagrams</code> branch of ${esc(pr.owner)}/${esc(pr.repo)}, apart from the PR’s own branch, so GitHub can show it.</span></label>` : ''}
 			<div class="crow">${posts ? `<button class="cbtn primary" data-post>Post to GitHub${S.login ? ` as ${esc(S.login)}` : ''}</button>` : ''}<button class="cbtn${posts ? '' : ' primary'}" data-copy>Copy as Markdown</button>${host.features?.firstmate ? '<button class="cbtn" data-firstmate>Send to Firstmate</button>' : ''}</div>
 		</div>`,
 			{ pause: 350, top: true }
@@ -1165,7 +1221,13 @@ export function mountChat(root, host) {
 		await me(`Post: **${VERDICT_LABEL[event]}**`);
 		const el = await say('<div class="ctext"><p>Posting to GitHub…</p></div>', { pause: 100 });
 		try {
-			await act('POST', '/post', { confirm: true, event, body, comments: draft.comments });
+			await act('POST', '/post', {
+				confirm: true,
+				event,
+				body,
+				comments: draft.comments,
+				diagrams: !!card.querySelector('input[name="diagrams"]')?.checked
+			});
 		} catch (e) {
 			el.remove();
 			card.querySelectorAll('input, textarea, button').forEach((x) => (x.disabled = false));
@@ -1200,6 +1262,7 @@ export function mountChat(root, host) {
 		const done = S.review.posted;
 		return `<div class="ccard cposted"><span class="cbadge ${esc(done.event)}">${done.event === 'APPROVE' ? '✓' : done.event === 'REQUEST_CHANGES' ? '!' : '…'}</span>
 		<div><b>${VERDICT_LABEL[done.event] ?? 'Review'}</b> posted on <a href="${esc(done.url)}" target="_blank" rel="noopener">${esc(S.review.pr.owner)}/${esc(S.review.pr.repo)}#${S.review.pr.number}</a>${extra}.
+		${(done.diagrams ?? []).length ? `<p class="cdim">With ${done.diagrams.map((d) => `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title.toLowerCase())}</a>`).join(', ')}.</p>` : ''}
 		${done.note ? `<p class="cdim">${inline(done.note)}</p>` : ''}</div></div>`;
 	}
 
@@ -1288,43 +1351,62 @@ export function mountChat(root, host) {
 				: '';
 		return `<li><button class="crowbtn${S.current === id ? ' here' : ''}${d ? ' decided' : ''}" data-jump="${esc(id)}" style="--v: var(--v-${c.verdict})" title="${esc(`${label(c.verdict)}: ${c.title}`)}">${mark(c.verdict)}<span class="ct">${esc(short(c.title, 70))}</span><span class="cd">${note}</span></button></li>`;
 	}
+	/** The toggles for which tiers the conversation walks: the major issues always, the rest on a click. */
+	function viewBar() {
+		const n = tierCounts(S.deck);
+		const toggle = (tier, text) =>
+			`<button class="ctoggle${tier === 'major' || S.view[tier] ? ' on' : ''}"${tier === 'major' ? ' disabled title="The major issues are always walked"' : ` data-view="${tier}"`} aria-pressed="${tier === 'major' || !!S.view[tier]}">${text} <b>${n[tier]}</b></button>`;
+		return `<div class="cview" role="group" aria-label="Which changes to walk"><span class="cview-l">Walking</span>${toggle('major', 'Major')}${toggle('minor', 'Minor')}${toggle('reference', 'Reference points')}</div>`;
+	}
 	function drawPassage() {
 		const cur = cardOf(S.current);
 		const groups = S.deck.groups.filter((g) => g.id !== 'generated');
 		const gen = S.deck.groups.find((g) => g.id === 'generated');
+		// A card out of the view is listed only while the chat is on it; a stop with none in view, once read, is hidden.
+		const listed = (id) => inView(id) || id === S.current;
 		navBody.innerHTML =
+			viewBar() +
 			groups
 				.map((g, gi) => {
-					const ids = g.id === 'skim' ? [...g.cards, ...(gen?.cards ?? [])] : g.cards;
+					const every = g.id === 'skim' ? [...g.cards, ...(gen?.cards ?? [])] : g.cards;
+					const ids = every.filter(listed);
+					const off = every.length - ids.length;
 					const here =
 						g.id === 'walkthrough'
-							? S.phase === 'context'
+							? S.phase === 'loading'
 							: cur && (cur.group === g.id || (g.id === 'skim' && cur.group === 'generated'));
 					const done =
 						g.id === 'walkthrough'
-							? S.phase !== 'loading' && S.phase !== 'context'
+							? S.phase !== 'loading'
 							: ids.length > 0 && ids.every((id) => cardOf(id)?.decision);
 					const state = g.state && g.state !== 'done' ? ` · ${STATE_NOTE[g.state] ?? g.state}` : '';
 					const sub =
 						g.id === 'walkthrough'
 							? `The overview and context${state}`
-							: `${ids.length} change${ids.length === 1 ? '' : 's'} · ${ids.filter((id) => S.vt(cardOf(id)?.verdict).family === 'concern').length} to look at${state}`;
+							: `${ids.length} change${ids.length === 1 ? '' : 's'} · ${ids.filter((id) => S.vt(cardOf(id)?.verdict).family === 'concern').length} to look at${off ? ` · ${off} more on a toggle` : ''}${state}`;
 					const dots = ids.length
 						? `<span class="cdots">${ids.map((id) => `<i style="--v: var(--v-${cardOf(id)?.verdict})"></i>`).join('')}</span>`
 						: '';
+					const stops = (g.stops ?? []).map((s, si) => ({ s, si, ids: s.cards.filter(listed) }));
+					const shownStops = stops.filter((x) => x.ids.length || x.s.state !== 'done');
+					const hidden = stops.length - shownStops.length;
 					const inner = g.stops
-						? g.stops
+						? shownStops
 								.map(
-									(s, si) =>
-										`<button class="cstoph" data-section="${esc(s.stage)}">Stop ${si + 1} · ${esc(s.title)}${s.state !== 'done' ? ` <span class="cstate">${STATE_NOTE[s.state] ?? s.state}</span>` : ''}</button><ul class="crows">${s.cards.map(cardRow).join('')}</ul>`
+									({ s, si, ids: own }) =>
+										`<button class="cstoph" data-section="${esc(s.stage)}">Stop ${si + 1} · ${esc(s.title)}${s.state !== 'done' ? ` <span class="cstate">${STATE_NOTE[s.state] ?? s.state}</span>` : ''}</button><ul class="crows">${own.map(cardRow).join('')}</ul>`
 								)
-								.join('')
+								.join('') +
+							(hidden
+								? `<p class="chidden">${hidden === 1 ? '1 stop' : `${hidden} stops`} with ${S.view.reference ? 'nothing' : 'only reference points'} in view</p>`
+								: '')
 						: ids.length
 							? `<ul class="crows">${ids.map(cardRow).join('')}</ul>`
 							: '';
 					return `<div class="cgroup"><button class="cghead${here ? ' here' : ''}${done ? ' done' : ''}" data-section="${g.id}"><span class="num">${done ? '✓' : gi + 1}</span><span><span class="gt">${esc(g.title)}</span><span class="gs">${esc(sub)}</span>${dots}</span></button>${inner}</div>`;
 				})
-				.join('') + '<button class="cfinish" data-section="finish">Finish review</button>';
+				.join('') +
+			'<button class="cfinish" data-section="finish">Finish review</button>';
 	}
 	function drawFiles() {
 		const q = fileFilter.toLowerCase();
@@ -1569,19 +1651,14 @@ export function mountChat(root, host) {
 		const w = S.review?.results?.walkthrough;
 		if (S.pending?.type === 'remember') chips = [];
 		else if (S.pending) chips = [['Cancel', 'cancel']];
-		else if (S.phase === 'context')
-			chips = [
-				['The project', 'ctx:project'],
-				['The story', 'ctx:story'],
-				['Start the review', 'start', true],
-				...(LIVE() ? (w?.questions ?? []).slice(0, 2).map((q) => [q, `say:${q}`]) : [])
-			];
 		else if (S.phase === 'review') {
 			chips = [['Next change →', 'next', true]];
 			if (c?.file) chips.push(['Open the file', 'openfile']);
 			chips.push(['Context', 'ctx:menu'], ['Finish review', 'finish']);
+			// About the PR as a whole, before the first change: the walkthrough's own questions.
+			if (!c && LIVE()) chips.push(...(w?.questions ?? []).slice(0, 2).map((q) => [q, `say:${q}`]));
 		} else if (S.phase === 'finish')
-			chips = readingOrder(S.deck).some((x) => !cardOf(x.id)?.decision)
+			chips = readingOrder(S.deck, S.view).some((x) => !cardOf(x.id)?.decision)
 				? [['Go to the first open change', 'firstopen', true]]
 				: [];
 		followups.innerHTML = chips
@@ -1592,7 +1669,9 @@ export function mountChat(root, host) {
 			.join('');
 	}
 	function updateProgress() {
-		const n = S.deck?.cards.filter((c) => c.decision).length ?? 0;
+		const n = S.deck
+			? readingOrder(S.deck, S.view).filter((x) => cardOf(x.id)?.decision).length
+			: 0;
 		const all = S.deck ? total() : 0;
 		$('#progressText').textContent = all ? `${n} of ${all} decided` : '';
 		$('#progressFill').style.width = all ? `${(n / all) * 100}%` : '0';
@@ -1625,7 +1704,7 @@ export function mountChat(root, host) {
 	});
 
 	async function onAct(a) {
-		if (a === 'start') return me('Start the review').then(startReview);
+		if (a === 'more:minor') return me('Show the minor issues').then(showMinor);
 		if (a === 'ctx:menu')
 			return say(
 				`<div class="ctext"><p>Which context?</p></div>${quick([
@@ -1651,7 +1730,7 @@ export function mountChat(root, host) {
 			return me('Not yet').then(() => sayText('Okay, it stays open.', { pause: 100 }));
 		if (a === 'finish') return me('Let’s finish').then(finish);
 		if (a === 'firstopen') {
-			const id = nextUndecided(S.deck, null);
+			const id = nextUndecided(S.deck, null, S.view);
 			return id ? showCard(id, { jumped: true }) : null;
 		}
 		if (a === 'openfile') {
@@ -1685,6 +1764,9 @@ export function mountChat(root, host) {
 
 	// ---------- one click handler for every smart component ----------
 	on(root, 'click', (e) => {
+		// A diagram toggles between fitting the chat and full size.
+		if (e.target.matches?.('[data-diagram] img'))
+			return e.target.closest('[data-diagram]').classList.toggle('full');
 		const t = e.target.closest('button, a');
 		if (!t || !app.contains(t)) return;
 		const d = t.dataset;
@@ -1713,7 +1795,8 @@ export function mountChat(root, host) {
 				refreshCard(d.undo);
 				return sayText('Undone. That change is open again.', { pause: 100, about: d.undo });
 			});
-		} else if (d.section) void jumpToSection(d.section);
+		} else if (d.view) setView(d.view, !S.view[d.view]);
+		else if (d.section) void jumpToSection(d.section);
 		else if (d.file) void jumpToFile(d.file);
 		else if (d.askline && S.drawer) {
 			input.value = `What does ${base(S.drawer.path)} line ${d.askline} do?`;
@@ -1836,11 +1919,7 @@ export function mountChat(root, host) {
 				: await api('POST', '/api/reviews', { url: host.pr });
 			if (dead) return;
 			$('#prTitle').textContent = r.pr?.title ?? '';
-			const [others, login] = await Promise.all([
-				api('GET', '/api/reviews').catch(() => ({ reviews: [] })),
-				Promise.resolve(host.identity?.login()).catch(() => null)
-			]);
-			S.others = others.reviews ?? [];
+			const login = await Promise.resolve(host.identity?.login()).catch(() => null);
 			S.login = typeof login === 'string' && login ? login : null;
 			if (dead) return;
 			take(r);

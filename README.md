@@ -9,11 +9,14 @@ It is the same review screen as the [PR review web app](https://github.com/chris
 - the reviewer is Claude through your own Claude Code sign-in (or a local Ollama model), so a review costs nothing extra;
 - `gh` reads the pull request and posts your review, signed in as you, so private repositories just work.
 
-The review:
+Clicking Review goes straight into the review, with nothing to click in between:
 
-1. **An overview** of the PR: what it does, what needs your attention, what was asked and whether it's met, its checks, and the shape of the review (every change, coloured by its verdict).
-2. **Context**, offered when you haven't reviewed the repo here before or the PR is large: _the project as a whole_ (its description and README) or _the story_ behind the PR (why it was made, what the author showed works, its description). A **Context** button is there either way.
-3. **The changes**, one message each, in reading order: the _Key changes_ a stop at a time, then a _Quality pass_ that opens with every concern in the review as a checklist, then the _Skim pile_ (generated files last). Each change has its main verdict and maybe a second one (Looks good, Explanation, Exemplary, Code smell, Over-complex, Not well tested, Doesn't meet acceptance criteria, Performance risk, Possible security issue), filed as _What I like_, _Worth knowing_, _Needs work_ or _Serious_. Serious is the verdicts that block: security, acceptance criteria, tests and performance. The code comes with its key lines highlighted and **Open full file**, a problem comes with a suggestion, and follow-up questions sit under it.
+1. **An overview** of the PR: what it does, what needs your attention, what was asked and whether it's met, its checks, the shape of the review (every change, coloured by its verdict), and a diagram of **how the change fits together** (see [The structure diagram](#the-structure-diagram)).
+2. **The major issues**, one message each, most serious first: the changes with a verdict that blocks (security, then acceptance criteria, performance and tests; a low-severity security issue last). Each says where it sits (a stop of the _Key changes_, the _Quality pass_, which opens with every concern in the review as a checklist, or the _Skim pile_).
+3. **The minor issues**, only if you ask: once every major issue is decided, the chat offers them (code smells, over-complex code) or to finish. A change with no concern at all (praise, an explanation) is only a reference point: the chat never walks it, and the navigator lists it only when you turn **Reference points** on. A stop with nothing but reference points is hidden the same way. **Context** on _the project as a whole_ (its description and README) or _the story_ behind the PR (why it was made, what the author showed works, its description) is a button away throughout.
+
+Each change has its main verdict and maybe a second one (Looks good, Explanation, Exemplary, Code smell, Over-complex, Not well tested, Doesn't meet acceptance criteria, Performance risk, Possible security issue), filed as _What I like_, _Worth knowing_, _Needs work_ or _Serious_. Serious is the verdicts that block: security, acceptance criteria, tests and performance. The code comes with its key lines highlighted and **Open full file**, a problem comes with a suggestion, and follow-up questions sit under it.
+
 4. **Accept**, **Disagree** or **Comment** on each change (or `A`, `D`, `C`); deciding moves on to the next open change. Type anything to ask the reviewer about the change in front of you (a line number opens the file there too), or "next", "back", "finish".
 5. **Finish review** drafts your verdict: _Request changes_ once you've accepted a blocking concern, _Comment_ for other feedback, _Approve_ otherwise. Post it to the pull request, copy it as Markdown, or send the change requests to Firstmate.
 
@@ -32,7 +35,7 @@ You need:
 
 ## Using it
 
-The tab lists the project's open pull requests and takes any GitHub PR URL. Nothing is read or reviewed until you click Review. The tab reopens the review you had open last, as the engine kept it, without reading the PR again, and **Reviews you started** picks any other up where you left it; **Check for new commits** in the review's bar reads it again with `gh`. `?pr=<number or URL>` on the tab's address does the same for a PR the engine already keeps; any other PR waits in the URL box for your click. The tab declares `opensPullRequest: '?pr={url}'`, so a Review link on a Wheelhouse chat card opens the PR here the same way, and still waits for your click. Older Wheelhouse versions ignore that field.
+The tab lists the project's open pull requests and takes any GitHub PR URL. Nothing is read or reviewed until you click Review. The tab reopens the review you had open last, as the engine kept it, without reading the PR again, and **Reviews you started** picks any other up where you left it; **Check for new commits** in the review's bar reads it again with `gh`. `?pr=<number or URL>` on the tab's address is a click on Review: it shows a PR the engine already keeps, and reads and reviews any other straight away. The tab declares `opensPullRequest: '?pr={url}'`, so a Review link on a Wheelhouse chat card opens the PR's review here directly. Older Wheelhouse versions ignore that field. The review you had open last, if the engine no longer keeps it, waits in the URL box for your click.
 
 The first time, the tab asks you to **Start the engine**. The engine is the plugin's companion service, a small server on `127.0.0.1` that does the slow work: reading the PR, the reviewer's passes, the chat, and posting. Wheelhouse starts it only on that click. It keeps running after Wheelhouse stops, and it opens a tab that closes itself.
 
@@ -48,11 +51,17 @@ A disagreement can be remembered for this PR, for you, or for everyone reviewing
 
 **Finish review** (in the navigator, or say "finish") lists what you decided and suggests a verdict. The draft is editable.
 
-- **Post to GitHub** posts a pull request review on the head you reviewed, with `gh`, as the account `gh` is signed in as. The changes you accepted or commented on become inline comments when their lines sit inside one hunk of the diff; the rest go in the summary with their file and lines. GitHub doesn't let you approve or request changes on your own pull request, so there it goes up as a comment, and the chat says so. Once it's posted, Finish shows the posted review instead of offering to post again.
+- **Post to GitHub** posts a pull request review on the head you reviewed, with `gh`, as the account `gh` is signed in as. The changes you accepted or commented on become inline comments when their lines sit inside one hunk of the diff; the rest go in the summary with their file and lines. GitHub doesn't let you approve or request changes on your own pull request, so there it goes up as a comment, and the chat says so. Once it's posted, Finish shows the posted review instead of offering to post again. With **Put the diagram on the pull request** (on by default), the structure diagram goes in the review too; see [The structure diagram](#the-structure-diagram).
 - **Copy as Markdown** copies the PR, the verdict, the commit reviewed, the summary and the line comments.
 - **Send to Firstmate** shows the message: the PR's URL, then each change with its file and lines. **Open in Firstmate's chat** puts it in Wheelhouse's chat box, the same handoff the GitHub issues plugin uses. Nothing is sent until you send it there.
 
 ![Finishing the review: the decisions, the suggested verdict Request changes, the editable draft and the buttons to post, copy or send it](docs/images/chat-finish.png)
+
+### The structure diagram
+
+When the PR changes source the plugin can read (JavaScript and TypeScript, Python, Go, Rust, CSS), the engine draws **how the change fits together** as an SVG, from the diff alone and without the model, so the same diff always draws the same picture. Each changed file is a box (green new, amber changed, red removed) with the functions, classes and types it adds (+), changes (~) or removes (−); arrows are the imports between them the PR adds (green), removes (red, dashed) or keeps (grey). Files sit left of what they import. An unchanged file or a package gets a box only when the PR adds or removes an import of it. At most 18 changed files are drawn, source first, then the biggest changes; the rest are counted. The SVG carries its own light and dark colours.
+
+The chat shows it in the overview (click it for full size). Posting the review with the diagram commits it, with `gh`'s Git data API, to a branch of its own in the PR's repository, `pr-review-diagrams` (made the first time, never merged, and apart from the PR's own branch), as `pr-<number>/<head>-structure.svg`, and the review's text shows it from that commit, so GitHub shows it inline to whoever can see the repository. If it can't go up (you can't push to the repository, say), the review still posts, and the chat says why.
 
 ### Prompts
 
@@ -201,7 +210,8 @@ Every answer that is a review also carries **`deck`**, the review laid out as ca
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `verdicts` | `CARD_VERDICTS`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `groups`   | The passage, in reading order: **Walkthrough** (with `asks`, each acceptance item and the cards that check it), **Key changes** (with `stops`, each stop's title, files and cards), **Quality pass** (its own cards, and `checklist`: every concern in the review, with its decision), **Skim pile** (with `files`, one line each) and **Generated** (`hidden: true`, with `files` and one card, made without the model). Each group has its `stages`, `state`, `cards` (ids), `look` (concerns) and `decided`. |
-| `cards`    | Every card in reading order, each with its `group` and the captain's `decision` (or null).                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `cards`    | Every card in reading order, each with its `group`, its `tier` and the captain's `decision` (or null).                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `tiers`    | How many cards are in each tier: `major` (a blocking verdict, main or secondary), `minor` (any other concern) and `reference` (no concern). A stop in `groups` has the `tier` of its most serious card.                                                                                                                                                                                                                                                                                                         |
 | `counts`   | How many cards have each verdict.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `remember` | The disagreements and comments the captain asked to remember: `{ card, scope, verdict, decision, text, file, repo, at }`. Nothing reads these back yet.                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -220,11 +230,11 @@ A review kept from before cards, and an answer in the older shape, still read as
 
 The `pr-review-tab` element reads `host.features`. Wheelhouse sets none of them, so the plugin keeps its defaults.
 
-| Feature     | Default | What it does                                                                                        |
-| ----------- | ------- | --------------------------------------------------------------------------------------------------- |
-| `post`      | on      | **Post to GitHub** in Finish review. Off, **Copy as Markdown** becomes the main button.             |
-| `firstmate` | on      | **Send to Firstmate** in Finish review.                                                             |
-| `autoOpen`  | off     | A `?pr=` link the engine doesn't keep opens straight away instead of waiting for a click on Review. |
+| Feature     | Default | What it does                                                                                                   |
+| ----------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `post`      | on      | **Post to GitHub** in Finish review. Off, **Copy as Markdown** becomes the main button.                        |
+| `firstmate` | on      | **Send to Firstmate** in Finish review.                                                                        |
+| `autoOpen`  | on      | A `?pr=` link the engine doesn't keep opens straight away. Off, it waits in the URL box for a click on Review. |
 
 When a host's `github.post` answers with an `event` other than the one asked for (say, a comment on the captain's own pull request) and a `note` saying why, the review keeps both in `posted`, and the chat shows the note. The plugin's own `gh` does this for your own pull request.
 
@@ -239,6 +249,7 @@ The engine:
 - reads with `gh pr view` and `gh pr diff`;
 - for the chat, reads one of the review's changed files whole at the head it was made at (`GET /api/reviews/<id>/file?path=…`, with `gh api repos/<owner>/<repo>/contents/<path>?ref=<head>`; any file the PR doesn't change, and any binary file, is refused), the project's description, topics and README (`GET /api/reviews/<id>/project`, with `gh api repos/<owner>/<repo>` and `…/readme`), and who `gh` is signed in as (`GET /api/identity`, with `gh api user`);
 - posts with `gh api -X POST repos/<owner>/<repo>/pulls/<n>/reviews`, only from **Post to GitHub** after you confirm;
+- with the diagram, first commits it to the repository's `pr-review-diagrams` branch (`gh api` on `repos/<owner>/<repo>/git/ref`, `git/trees`, `git/commits` and `git/refs`), in the same click;
 - keeps your prompts and one file per review in its state directory: `$PR_REVIEW_STATE_DIR`, else `$XDG_STATE_HOME/pr-review-wheelhouse`, else `~/.local/state/pr-review-wheelhouse`.
 
 It answers only on `127.0.0.1`, and only requests that name this computer as their host. A request from a page must come from a page on this computer, and a request that changes anything must carry a header that a plain form from another site can't send.
@@ -264,6 +275,7 @@ The plugin has no runtime dependencies and no build step. Wheelhouse imports `wh
   - `model.js`: the reviewer, Claude Code, Ollama or an OpenAI-compatible API, behind one interface.
   - `github.js`: `gh`.
   - `diff.js`: reading the diff.
+  - `diagram.js`: the structure diagram, from the diff.
 - `wheelhouse/ui/`: the review screens, shared with the web app.
   - `index.js`: the `pr-review-tab` element: the engine, the pull request picker, the prompts, and the chat with Wheelhouse's host.
   - `chat.js`: the `pr-review-chat` element, the chat review itself; `chat-core.js`, its logic without the page; `chat-styles.js`, its styles.

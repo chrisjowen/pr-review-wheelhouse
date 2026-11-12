@@ -1,7 +1,7 @@
 /**
  * The chat review's logic, apart from the page: what a card says in the chat
- * (its parts, its code), the order the conversation walks the cards in, when
- * to offer context, what a typed line means, and the small Markdown the
+ * (its parts, its code), the order the conversation walks the cards in (the
+ * major issues first), what a typed line means, and the small Markdown the
  * reviewer writes in. Pure functions of the engine's review and its deck
  * (`deckOf` in `wheelhouse/ui/cards.js`, which carries the verdict set), so
  * Node's tests read them as the page does. Nothing here imports anything.
@@ -96,27 +96,83 @@ export function codeOf(file, from, to, pad = 2) {
 }
 
 /**
- * The chat's reading order: every card in the passage's order, with the
- * section it opens (a stop of the key changes, or a group). The generated
- * files close the skim pile, as the approved groups have no group of their own.
+ * Which cards the chat walks: the major issues always; the minor ones once
+ * the captain asks for them; the reference points (praise and explanations)
+ * only when turned on.
+ *
+ * @typedef {{ minor: boolean; reference: boolean }} View
+ */
+/** @type {View} */
+export const ISSUES_ONLY = { minor: false, reference: false };
+/** @type {View} */
+export const EVERYTHING = { minor: true, reference: true };
+
+/** Each tier's label, singular and plural, for the chat to name a card by. */
+export const TIER_LABEL = {
+	major: ['Major issue', 'Major issues'],
+	minor: ['Minor issue', 'Minor issues'],
+	reference: ['Reference point', 'Reference points']
+};
+const TIER_RANK = { major: 0, minor: 1, reference: 2 };
+const SEVERITY_RANK = { high: 0, medium: 1, low: 3 };
+
+/** A deck card's tier; a card from an engine before tiers reads as a reference point. */
+export const tierOfCard = (c) => (c?.tier in TIER_RANK ? c.tier : 'reference');
+
+/**
+ * The chat's reading order: the cards `view` lets in, most serious first (by
+ * tier, then severity, with a high or medium security issue first and a low
+ * one last, then verdict: security, acceptance criteria, performance, tests,
+ * then over-complex and code smell), the passage's order between equals.
+ * Each comes with the section it opens (a stop of the key changes, or a
+ * group); the generated files belong to the skim pile.
  *
  * @param {any} deck
- * @returns {{ id: string; section: string; group: string }[]}
+ * @param {View} [view] every card when left out
+ * @returns {{ id: string; section: string; group: string; tier: 'major' | 'minor' | 'reference' }[]}
  */
-export function readingOrder(deck) {
-	const out = [];
+export function readingOrder(deck, view = EVERYTHING) {
+	const byId = new Map((deck?.cards ?? []).map((c) => [c.id, c]));
+	// Concerns most serious first; praise and explanations keep the passage's order.
+	const rank = new Map(
+		(deck?.verdicts ?? []).map((v, i, all) => [v.id, v.family === 'concern' ? all.length - i : 99])
+	);
+	const passage = [];
 	for (const g of deck?.groups ?? []) {
 		const group = g.id === 'generated' ? 'skim' : g.id;
 		if (g.stops)
-			for (const s of g.stops) for (const id of s.cards) out.push({ id, section: s.stage, group });
-		else for (const id of g.cards) out.push({ id, section: group, group });
+			for (const s of g.stops)
+				for (const id of s.cards) passage.push({ id, section: s.stage, group });
+		else for (const id of g.cards) passage.push({ id, section: group, group });
 	}
-	return out;
+	const key = (x, i) => {
+		const c = byId.get(x.id);
+		const verdict = Math.min(
+			...[c?.verdict, c?.secondary].filter(Boolean).map((v) => rank.get(v) ?? 99)
+		);
+		return [TIER_RANK[x.tier], SEVERITY_RANK[c?.severity] ?? 2, verdict, i];
+	};
+	return passage
+		.map((x) => ({ ...x, tier: tierOfCard(byId.get(x.id)) }))
+		.filter((x) => x.tier === 'major' || view[x.tier])
+		.map((x, i) => ({ x, k: key(x, i) }))
+		.sort((a, b) => {
+			const at = a.k.findIndex((v, j) => v !== b.k[j]);
+			return at < 0 ? 0 : a.k[at] - b.k[at];
+		})
+		.map(({ x }) => x);
 }
 
-/** The next card after `from` with no decision yet, wrapping round; null when every card is decided. */
-export function nextUndecided(deck, from) {
-	const order = readingOrder(deck);
+/** How many cards of each tier the deck holds. */
+export function tierCounts(deck) {
+	const n = { major: 0, minor: 0, reference: 0 };
+	for (const c of deck?.cards ?? []) n[tierOfCard(c)]++;
+	return n;
+}
+
+/** The next card after `from` with no decision yet, wrapping round; null when every card `view` lets in is decided. */
+export function nextUndecided(deck, from, view = EVERYTHING) {
+	const order = readingOrder(deck, view);
 	const decided = new Set((deck?.cards ?? []).filter((c) => c.decision).map((c) => c.id));
 	const at = from ? order.findIndex((x) => x.id === from) : -1;
 	for (let i = 1; i <= order.length; i++) {
@@ -126,37 +182,13 @@ export function nextUndecided(deck, from) {
 	return null;
 }
 
-/** How big a PR has to be before the chat offers context unasked. */
-export const LARGE = { files: 15, lines: 800 };
-
-/**
- * Whether to offer the project or the story before the changes: on a repo
- * the reviewer hasn't reviewed here before, or on a large PR. A context
- * button is there either way. Only a review they did something in (decided
- * a card, or posted it) counts: not one merely opened, nor an untouched demo.
- *
- * @param {any} review the engine's review
- * @param {{ id: string; repo: string; decided?: number; posted?: unknown }[]} others every review kept for this reviewer
- */
-export function offerContext(review, others = []) {
-	const repo = `${review.pr.owner}/${review.pr.repo}`.toLowerCase();
-	const familiar = others.some(
-		(r) =>
-			String(r.repo).toLowerCase() === repo && r.id !== review.id && (r.decided > 0 || !!r.posted)
-	);
-	const files = review.files?.length ?? 0;
-	const lines = (review.files ?? []).reduce((n, f) => n + (f.add ?? 0) + (f.del ?? 0), 0);
-	const large = files >= LARGE.files || lines >= LARGE.lines;
-	return { offer: !familiar || large, familiar, large, files, lines };
-}
-
 /**
  * What a typed line means: a command the chat carries out itself, or a
  * question for the reviewer. Only “accept” accepts; a casual yes (“ok”,
  * “lgtm”) is `agree`, which the chat confirms before recording anything.
  *
  * @param {string} raw
- * @returns {{ type: 'next' | 'back' | 'accept' | 'agree' | 'disagree' | 'comment' | 'finish' | 'open' | 'goto' | 'context' | 'cancel' | 'ask'; text: string; arg?: string; line?: number }}
+ * @returns {{ type: 'next' | 'back' | 'minor' | 'accept' | 'agree' | 'disagree' | 'comment' | 'finish' | 'open' | 'goto' | 'context' | 'cancel' | 'ask'; text: string; arg?: string; line?: number }}
  */
 export function parseLine(raw) {
 	const text = String(raw ?? '').trim();
@@ -164,6 +196,8 @@ export function parseLine(raw) {
 	if (/^(cancel|never ?mind)\b/.test(t)) return { type: 'cancel', text };
 	if (/^(next|continue|go on|move on|skip)$/.test(t)) return { type: 'next', text };
 	if (/^(back|previous|prev|go back)$/.test(t)) return { type: 'back', text };
+	if (/^(show (me )?)?(the )?(minor( ones| issues)?|small (things|stuff|ones))$/.test(t))
+		return { type: 'minor', text };
 	if (/^accept[.!]?$/.test(t)) return { type: 'accept', text };
 	if (/^(i )?(agree|lgtm|looks good|ok|okay|fine|sounds (right|good))[.!]?$/.test(t))
 		return { type: 'agree', text };

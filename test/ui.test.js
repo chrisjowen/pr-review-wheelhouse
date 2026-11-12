@@ -189,7 +189,7 @@ describe('a chat review in the tab', () => {
 		el = mount(running(e));
 		await until(() => $(el, '.pr-row button') && !$(el, '.pr-row button').disabled);
 		$(el, '.pr-row button').click();
-		await until(() => /do you want some context\?/.test(said(el)), 8000);
+		await until(() => inChat(el, '.ccard.change'), 8000);
 	});
 	after(async () => {
 		el.remove();
@@ -205,14 +205,33 @@ describe('a chat review in the tab', () => {
 		assert.match(t, /Keep the subgraph each adapter returns/);
 		assert.match(inChat(el, '#prTitle').textContent, /Draw <img src=x onerror=alert\(1\)> boards/);
 		assert.match(t, /Draw <img src=x onerror=alert\(1\)> boards/);
-		assert.equal(allInChat(el, 'img').length, 0, 'no element from the PR’s text');
+		assert.deepEqual(
+			allInChat(el, 'img').map((i) => i.closest('[data-diagram]') !== null),
+			[true],
+			'no element from the PR’s text: the only image is the diagram'
+		);
 		assert.equal(inChat(el, '.cnum').textContent, 'acme/lumen#48');
 		assert.match(inChat(el, '.cnote').textContent, /^Claude \(sonnet\) on this computer/);
 	});
 
-	it('offers context on a repo it hasn’t reviewed, and reads the project through gh', async () => {
-		assert.match(said(el), /You haven’t reviewed this repo here before/);
-		enabled(el, '[data-act="ctx:project"]')[0].click();
+	it('shows how the change fits together, drawn from the diff, full size on a click', () => {
+		const fig = inChat(el, '[data-diagram]');
+		const img = fig.querySelector('img');
+		assert.match(img.getAttribute('src'), /^data:image\/svg\+xml;charset=utf-8,%3Csvg/);
+		assert.match(img.getAttribute('alt'), /^How the change fits together: \d+ changed files/);
+		assert.match(said(el), /How the change fits together/);
+		img.click();
+		assert.ok(fig.classList.contains('full'));
+		img.click();
+		assert.ok(!fig.classList.contains('full'));
+	});
+
+	it('goes straight to the first major issue, with context a click away, and reads the project through gh', async () => {
+		assert.doesNotMatch(said(el), /do you want some context|Start the review/);
+		assert.match(said(el), /then the major issues, most serious first/);
+		enabled(el, '#followups [data-act="ctx:menu"]')[0].click();
+		await until(() => enabled(el, '#log [data-act="ctx:project"]').length);
+		enabled(el, '#log [data-act="ctx:project"]')[0].click();
 		await until(() => /A board for graph search\./.test(said(el)));
 		assert.match(said(el), /acme\/lumen: Graph search on a board/);
 		assert.ok(
@@ -222,11 +241,9 @@ describe('a chat review in the tab', () => {
 	});
 
 	it('walks the changes one at a time, each with its verdicts and its code', async () => {
-		enabled(el, '#followups [data-act="start"]')[0].click();
-		await until(() => inChat(el, '.ccard.change'));
 		const card = inChat(el, '.ccard.change');
 		const head = card.querySelector('.chead').textContent;
-		assert.match(head, /^Change 1 of \d+ · Key changes · Stop 1: Keep the subgraph/);
+		assert.match(head, /^Major issue 1 of 4 · Key changes · Stop 1: Keep the subgraph/);
 		assert.equal(card.querySelector('h3').textContent, 'Reads other scopes');
 		assert.deepEqual(
 			[...card.querySelectorAll('.cpk')].map((p) => p.textContent.replace(/\s+/g, ' ').trim()),
@@ -290,9 +307,10 @@ describe('a chat review in the tab', () => {
 		assert.equal(e.reviews.view(ID).cardDecisions[first].decision, 'accept');
 		assert.match(
 			allInChat(el, '.ccard.change')[1].querySelector('.chead').textContent,
-			/^Change 2 of/
+			/^Major issue 2 of 4 · Key changes · Stop 2/,
+			'the other security issue before either acceptance criteria one'
 		);
-		assert.match(inChat(el, '#progressText').textContent, /^1 of \d+ decided$/);
+		assert.match(inChat(el, '#progressText').textContent, /^1 of 4 decided$/);
 	});
 
 	it('switches files with Ctrl/Cmd+E, and lists the passage beside the chat', async () => {
@@ -332,6 +350,8 @@ describe('a chat review in the tab', () => {
 			[...card.querySelectorAll('.crow button')].map((b) => b.textContent.trim()),
 			['Post to GitHub as reviewer', 'Copy as Markdown', 'Send to Firstmate']
 		);
+		assert.ok(card.querySelector('input[name="diagrams"]').checked, 'the diagram goes with it');
+		assert.match(card.textContent, /pr-review-diagrams branch of acme\/lumen/);
 	});
 
 	it('hands the change requests to Firstmate through Wheelhouse’s chat box', async () => {
@@ -346,12 +366,19 @@ describe('a chat review in the tab', () => {
 		);
 	});
 
-	it('posts the review with gh only on a click', async () => {
-		const posts = () => e.gh.calls.filter((c) => c.argv.includes('POST'));
-		assert.equal(posts().length, 0);
+	it('posts the review with gh only on a click, with the diagram', async () => {
+		const writes = () => e.gh.calls.filter((c) => c.argv.includes('POST'));
+		const posts = () => writes().filter((c) => c.argv.some((a) => a.endsWith('/reviews')));
+		assert.equal(writes().length, 0);
 		inChat(el, '[data-post]').click();
 		await until(() => inChat(el, '.cposted'));
+		assert.ok(writes().some((c) => c.argv.includes('repos/acme/lumen/git/refs')));
 		const sent = JSON.parse(posts()[0].input);
+		assert.match(
+			sent.body,
+			/!\[How the change fits together: [^\]]+\]\(https:\/\/github\.com\/acme\/lumen\/raw\/c0ffee7\//
+		);
+		assert.match(inChat(el, '.cposted').textContent, /With how the change fits together\./);
 		assert.equal(sent.event, 'REQUEST_CHANGES');
 		assert.equal(sent.commit_id, 'a'.repeat(40));
 		assert.equal(sent.comments.length, 1);
@@ -366,6 +393,73 @@ describe('a chat review in the tab', () => {
 		await until(() => /Reviews you started/.test(text(el)));
 		assert.match(text(el), /1 change decided/);
 		assert.match(text(el), /posted to GitHub/);
+	});
+});
+
+describe('the major issues first, the minor ones on request', () => {
+	let e;
+	let el;
+	before(async () => {
+		localStorage.clear();
+		e = await engine();
+		await e.reviews.open(PR_URL);
+		await e.reviews.settled();
+		localStorage.setItem('pr-review.last.lumen', JSON.stringify({ url: PR_URL }));
+		el = mount(running(e));
+		await until(() => inChat(el, '.ccard.change'), 8000);
+	});
+	after(async () => {
+		el.remove();
+		await e.close();
+	});
+	const titles = () => allInChat(el, '.ccard.change h3').map((h) => h.textContent);
+	const navRows = () => allInChat(el, '#navBody .crowbtn .ct').map((x) => x.textContent);
+
+	it('lists only the major issues in the navigator, with the rest a toggle away', () => {
+		const toggles = allInChat(el, '.cview .ctoggle').map((b) => [
+			b.textContent.replace(/\s+/g, ' ').trim(),
+			b.getAttribute('aria-pressed')
+		]);
+		assert.deepEqual(toggles, [
+			['Major 4', 'true'],
+			['Minor 1', 'false'],
+			['Reference points 5', 'false']
+		]);
+		assert.ok(!navRows().includes('Clear names'), 'praise stays out of the way');
+		assert.ok(!navRows().includes('The same spread eleven times'), 'so does a minor issue');
+		inChat(el, '[data-view="reference"]').click();
+		assert.ok(navRows().includes('Clear names'));
+		assert.equal(inChat(el, '[data-view="reference"]').getAttribute('aria-pressed'), 'true');
+		inChat(el, '[data-view="reference"]').click();
+		assert.ok(!navRows().includes('Clear names'));
+	});
+
+	it('walks every major issue, then asks before the minor ones', async () => {
+		for (let i = 1; i <= 4; i++) {
+			await until(() => allInChat(el, '.ccard.change').length === i);
+			allInChat(el, '.ccard.change').at(-1).querySelector('[data-decide="accept"]').click();
+		}
+		await until(() => /That’s all 4 major issues\. There is 1 minor one too/.test(said(el)));
+		assert.deepEqual(titles(), [
+			'Reads other scopes',
+			'Reads other scopes',
+			'Never multiplies the score',
+			'Never multiplies the score'
+		]);
+		assert.equal(inChat(el, '[data-finish]'), null, 'nothing finished without asking');
+		enabled(el, '#log [data-act="more:minor"]')[0].click();
+		await until(() => allInChat(el, '.ccard.change').length === 5);
+		const minor = allInChat(el, '.ccard.change').at(-1);
+		assert.equal(minor.querySelector('h3').textContent, 'The same spread eleven times');
+		assert.match(minor.querySelector('.chead').textContent, /^Minor issue 1 of 1 · Quality pass/);
+		assert.equal(inChat(el, '[data-view="minor"]').getAttribute('aria-pressed'), 'true');
+	});
+
+	it('finishes once the minor ones are decided too, never walking the reference points', async () => {
+		allInChat(el, '.ccard.change').at(-1).querySelector('[data-decide="accept"]').click();
+		await until(() => inChat(el, '[data-finish]'));
+		assert.ok(!titles().includes('Clear names'));
+		assert.doesNotMatch(said(el), /You didn’t go through/);
 	});
 });
 
@@ -407,12 +501,12 @@ describe('coming back to the tab', () => {
 		el.remove();
 	});
 
-	it('waits for a click before reviewing a ?pr= link it doesn’t keep', async () => {
+	it('waits for a click on a ?pr= link only when the host turns opening links off', async () => {
 		const other = 'https://github.com/acme/lumen/pull/49';
 		window.happyDOM.setURL(`http://127.0.0.1:4310/projects/lumen/pr-review/review?pr=${other}`);
 		const reads = e.gh.calls.length;
 		const passes = e.model.calls.length;
-		const el = mount(running(e));
+		const el = mount({ ...running(e), features: { autoOpen: false } });
 		await until(() => $(el, '[data-key="pr-url"]')?.value === other);
 		assert.equal($(el, 'pr-review-chat'), null);
 		assert.equal(button(el, 'Review').disabled, false);
@@ -422,17 +516,18 @@ describe('coming back to the tab', () => {
 		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
 	});
 
-	it('opens a ?pr= link straight away when the host is itself the click on Review', async () => {
+	it('opens a ?pr= link straight into the review, as Wheelhouse’s Review is itself the click', async () => {
 		const other = 'https://github.com/acme/lumen/pull/49';
 		window.happyDOM.setURL(`http://127.0.0.1:4310/projects/lumen/pr-review/review?pr=${other}`);
 		const reads = e.gh.calls.length;
-		const el = mount({ ...running(e), features: { autoOpen: true } });
+		const el = mount(running(e));
 		await until(() => e.gh.calls.length > reads);
 		assert.ok(
 			e.gh.calls.slice(reads).some((c) => c.argv[1] === 'view' && c.argv[2] === '49'),
 			'read PR 49 without a click'
 		);
 		await until(() => $(el, 'pr-review-chat'));
+		assert.equal($(el, '.picker'), null, 'no picker, and nothing else, in between');
 		await e.reviews.settled();
 		el.remove();
 		window.happyDOM.setURL('http://127.0.0.1:4310/projects/lumen/pr-review/review');
@@ -483,13 +578,14 @@ describe('a host that is not Wheelhouse', () => {
 			configurable: true
 		});
 		const el = mount({ ...running(e), features: { post: false, firstmate: false } });
-		await until(() => /do you want some context\?/.test(said(el)));
+		await until(() => inChat(el, '.ccard.change'));
 		type(el, 'finish');
 		await until(() => inChat(el, '[data-finish]'));
 		assert.deepEqual(
 			allInChat(el, '[data-finish] .crow button').map((b) => b.textContent.trim()),
 			['Copy as Markdown']
 		);
+		assert.equal(inChat(el, 'input[name="diagrams"]'), null, 'nothing to post the diagram with');
 		assert.ok(inChat(el, '[data-copy]').classList.contains('primary'));
 		inChat(el, '[data-copy]').click();
 		await until(() => copied.length);
